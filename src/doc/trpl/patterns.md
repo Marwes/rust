@@ -202,6 +202,21 @@ match origin {
 
 [struct]: structs.html
 
+For cases where the variable has the same name as the field we can omit the variable through field punning.
+
+```rust
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+let origin = Point { x: 0, y: 0 };
+
+match origin {
+    Point { x, y } => println!("({},{})", x, y),
+}
+```
+
 If we only care about some of the values, we don’t have to give them all names:
 
 ```rust
