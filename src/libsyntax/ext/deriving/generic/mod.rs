@@ -1719,3 +1719,232 @@ pub fn cs_and(enum_nonmatch_f: EnumNonMatchCollapsedFunc,
              enum_nonmatch_f,
              cx, span, substructure)
 }
+
+#[cfg(test)]
+mod tests {
+    use rand::{Rand, Rng, SeedableRng, XorShiftRng};
+    use test::Bencher;
+
+    #[derive(PartialEq, PartialOrd)]
+    enum Test {
+        Variant1,
+        Variant2,
+        Variant3,
+        Variant4,
+        Variant5,
+    }
+    
+    #[derive(PartialEq, PartialOrd)]
+    enum Test2 {
+        Variant1(i32, i32),
+        Variant2(f64),
+        Variant3,
+        Variant4(Vec<Test2>),
+        Variant5,
+    }
+
+    #[derive(PartialEq, PartialOrd)]
+    enum Large {
+        Variant1,
+        Variant2,
+        Variant3,
+        Variant4,
+        Variant5,
+        Variant6,
+        Variant7,
+        Variant8,
+        Variant9,
+        Variant10,
+        Variant11,
+        Variant12,
+        Variant13,
+        Variant14,
+        Variant15,
+        Variant16,
+        Variant17,
+        Variant18,
+        Variant19,
+        Variant20,
+        Variant21,
+        Variant22,
+        Variant23,
+        Variant24,
+        Variant25,
+        Variant26,
+        Variant27,
+        Variant28,
+        Variant29,
+        Variant30,
+        Variant31,
+        Variant32,
+        Variant33,
+        Variant34,
+        Variant35,
+        Variant36,
+        Variant37,
+        Variant38,
+        Variant39,
+        Variant40,
+        Variant41,
+        Variant42,
+        Variant43,
+        Variant44,
+        Variant45,
+        Variant46,
+        Variant47,
+        Variant48,
+        Variant49,
+        Variant50,
+        Variant51,
+        Variant52,
+        Variant53,
+        Variant54,
+        Variant55,
+        Variant56,
+        Variant57,
+        Variant58,
+        Variant59,
+        Variant60,
+    }
+
+    impl Rand for Test {
+        fn rand<R: Rng> (r: &mut R) -> Test {
+            match r.gen_range(0, 5) {
+                0 => Test::Variant1,
+                1 => Test::Variant2,
+                2 => Test::Variant3,
+                3 => Test::Variant4,
+                4 => Test::Variant5,
+                _ => panic!()
+            }
+        }
+    }
+
+    impl Rand for Test2 {
+        fn rand<R: Rng> (r: &mut R) -> Test2 {
+            match r.gen_range(0, 5) {
+                0 => Test2::Variant1(i32::rand(r), i32::rand(r)),
+                1 => Test2::Variant2(f64::rand(r)),
+                2 => Test2::Variant3,
+                3 => {
+                    let i = r.gen_range(0, 10);
+                    Test2::Variant4(r.gen_iter().take(i).collect())
+                }
+                4 => Test2::Variant5,
+                _ => panic!()
+            }
+        }
+    }
+    impl Rand for Large {
+        fn rand<R: Rng> (r: &mut R) -> Large {
+            use self::Large::*;
+            match r.gen_range(1, 61) {
+                1 => Variant1,
+                2 => Variant2,
+                3 => Variant3,
+                4 => Variant4,
+                5 => Variant5,
+                6 => Variant6,
+                7 => Variant7,
+                8 => Variant8,
+                9 => Variant9,
+                10 => Variant10,
+                11 => Variant11,
+                12 => Variant12,
+                13 => Variant13,
+                14 => Variant14,
+                15 => Variant15,
+                16 => Variant16,
+                17 => Variant17,
+                18 => Variant18,
+                19 => Variant19,
+                20 => Variant20,
+                21 => Variant21,
+                22 => Variant22,
+                23 => Variant23,
+                24 => Variant24,
+                25 => Variant25,
+                26 => Variant26,
+                27 => Variant27,
+                28 => Variant28,
+                29 => Variant29,
+                30 => Variant30,
+                31 => Variant31,
+                32 => Variant32,
+                33 => Variant33,
+                34 => Variant34,
+                35 => Variant35,
+                36 => Variant36,
+                37 => Variant37,
+                38 => Variant38,
+                39 => Variant39,
+                40 => Variant40,
+                41 => Variant41,
+                42 => Variant42,
+                43 => Variant43,
+                44 => Variant44,
+                45 => Variant45,
+                46 => Variant46,
+                47 => Variant47,
+                48 => Variant48,
+                49 => Variant49,
+                50 => Variant50,
+                51 => Variant51,
+                52 => Variant52,
+                53 => Variant53,
+                54 => Variant54,
+                55 => Variant55,
+                56 => Variant56,
+                57 => Variant57,
+                58 => Variant58,
+                59 => Variant59,
+                60 => Variant60,
+                _ => panic!()
+            }
+        }
+    }
+
+    fn bench_type<T>(b: &mut Bencher, f: F)
+        where T: Rand
+            , F: Fn(&T, &T) -> bool {
+        let mut rng: XorShiftRng = SeedableRng::from_seed([1,2,3,4]);
+        let values: Vec<T> = rng.gen_iter().take(500).collect()
+        b.iter(|| {
+            for x in values {
+                for y in values {
+                    ::test::black_box(f(x, y));
+                }
+            }
+        })
+    }
+
+    #[bench]
+    fn test1_partial_eq(b: &mut Bencher) {
+        bench_type::<Test>(b, |x, y| x == y);
+    }
+
+    #[bench]
+    fn test2_partial_eq(b: &mut Bencher) {
+        bench_type::<Test2>(b, |x, y| x == y);
+    }
+
+    #[bench]
+    fn large_c_like(b: &mut Bencher) {
+        bench_type::<Large>(b, |x, y| x == y);
+    }
+
+    #[bench]
+    fn test1_partial_ord(b: &mut Bencher) {
+        bench_type::<Large>(b, |x, y| x <= y);
+    }
+
+    #[bench]
+    fn test2_partial_ord(b: &mut Bencher) {
+        bench_type::<Test2>(b, |x, y| x <= y);
+    }
+
+    #[bench]
+    fn large_c_like_ord(b: &mut Bencher) {
+        bench_type::<Large>(b, |x, y| x <= y);
+    }
+}
