@@ -275,7 +275,7 @@ impl<'a, 'tcx> CombineFields<'a, 'tcx> {
             make_region_vars: make_region_vars,
             cycle_detected: false
         };
-        let u = ty.fold_with(&mut generalize);
+        let u = ty.option_fold_with(&mut generalize).unwrap_or(ty);
         if generalize.cycle_detected {
             Err(TypeError::CyclicTy)
         } else {
@@ -298,6 +298,10 @@ impl<'cx, 'tcx> ty::fold::TypeFolder<'tcx> for Generalizer<'cx, 'tcx> {
     }
 
     fn fold_ty(&mut self, t: Ty<'tcx>) -> Ty<'tcx> {
+        self.option_fold_ty(t).unwrap_or(t)
+    }
+
+    fn option_fold_ty(&mut self, t: Ty<'tcx>) -> Option<Ty<'tcx>> {
         // Check to see whether the type we are genealizing references
         // `vid`. At the same time, also update any type variables to
         // the values that they are bound to. This is needed to truly
@@ -309,16 +313,16 @@ impl<'cx, 'tcx> ty::fold::TypeFolder<'tcx> for Generalizer<'cx, 'tcx> {
             ty::TyInfer(ty::TyVar(vid)) => {
                 if vid == self.for_vid {
                     self.cycle_detected = true;
-                    self.tcx().types.err
+                    Some(self.tcx().types.err)
                 } else {
                     match self.infcx.type_variables.borrow().probe(vid) {
-                        Some(u) => self.fold_ty(u),
-                        None => t,
+                        Some(u) => Some(self.option_fold_ty(u).unwrap_or(u)),
+                        None => None,
                     }
                 }
             }
             _ => {
-                t.super_fold_with(self)
+                t.super_option_fold_with(self)
             }
         }
     }

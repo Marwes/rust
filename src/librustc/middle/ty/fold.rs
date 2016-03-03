@@ -51,8 +51,17 @@ use util::nodemap::{FnvHashMap, FnvHashSet};
 /// Basically, every type that has a corresponding method in TypeFolder.
 pub trait TypeFoldable<'tcx>: fmt::Debug + Clone {
     fn super_fold_with<F: TypeFolder<'tcx>>(&self, folder: &mut F) -> Self;
+
+    fn super_option_fold_with<F: TypeFolder<'tcx>>(&self, folder: &mut F) -> Option<Self> {
+        Some(self.super_fold_with(folder))
+    }
+
     fn fold_with<F: TypeFolder<'tcx>>(&self, folder: &mut F) -> Self {
         self.super_fold_with(folder)
+    }
+
+    fn option_fold_with<F: TypeFolder<'tcx>>(&self, folder: &mut F) -> Option<Self> {
+        Some(self.fold_with(folder))
     }
 
     fn super_visit_with<V: TypeVisitor<'tcx>>(&self, visitor: &mut V) -> bool;
@@ -136,6 +145,10 @@ pub trait TypeFolder<'tcx> : Sized {
 
     fn fold_ty(&mut self, t: Ty<'tcx>) -> Ty<'tcx> {
         t.super_fold_with(self)
+    }
+
+    fn option_fold_ty(&mut self, t: Ty<'tcx>) -> Option<Ty<'tcx>> {
+        Some(self.fold_ty(t))
     }
 
     fn fold_mt(&mut self, t: &ty::TypeAndMut<'tcx>) -> ty::TypeAndMut<'tcx> {
