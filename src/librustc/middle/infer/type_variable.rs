@@ -15,14 +15,17 @@ use middle::def_id::{DefId};
 use middle::ty::{self, Ty};
 use syntax::codemap::Span;
 
+use std::cell::RefCell;
 use std::cmp::min;
 use std::marker::PhantomData;
 use std::mem;
 use std::u32;
 use rustc_data_structures::snapshot_vec as sv;
+use rustc_data_structures::unify as ut;
 
 pub struct TypeVariableTable<'tcx> {
     values: sv::SnapshotVec<Delegate<'tcx>>,
+    eq_relations: RefCell<ut::UnificationTable<ty::TyVid>>,
 }
 
 struct TypeVariableData<'tcx> {
@@ -50,7 +53,8 @@ pub struct Default<'tcx> {
 }
 
 pub struct Snapshot {
-    snapshot: sv::Snapshot
+    snapshot: sv::Snapshot,
+    eq_snapshot: ut::Snapshot<ty::TyVid>,
 }
 
 enum UndoEntry<'tcx> {
@@ -81,7 +85,10 @@ impl RelationDir {
 
 impl<'tcx> TypeVariableTable<'tcx> {
     pub fn new() -> TypeVariableTable<'tcx> {
-        TypeVariableTable { values: sv::SnapshotVec::new() }
+        TypeVariableTable {
+            values: sv::SnapshotVec::new(),
+            eq_relations: RefCell::new(ut::UnificationTable::new()),
+        }
     }
 
     fn relations<'a>(&'a mut self, a: ty::TyVid) -> &'a mut Vec<Relation> {
@@ -104,10 +111,10 @@ impl<'tcx> TypeVariableTable<'tcx> {
     /// Precondition: neither `a` nor `b` are known.
     pub fn relate_vars(&mut self, a: ty::TyVid, dir: RelationDir, b: ty::TyVid) {
         if a != b {
-            let new_rel = (dir, b);
-            // Don't add duplicate relations
-            if self.relations(a).iter().all(|rel| *rel != new_rel) {
-                self.relations(a).push(new_rel);
+            if dir == EqTo {
+                self.eq_relations.borrow_mut().union(a, b);
+            } else {
+                self.relations(a).push((dir, b));
                 self.relations(b).push((dir.opposite(), a));
                 self.values.record(Relate(a, b));
             }
@@ -145,6 +152,7 @@ impl<'tcx> TypeVariableTable<'tcx> {
     pub fn new_var(&mut self,
                    diverging: bool,
                    default: Option<Default<'tcx>>) -> ty::TyVid {
+        self.eq_relations.borrow_mut().new_key(());
         let index = self.values.push(TypeVariableData {
             value: Bounded { relations: vec![], default: default },
             diverging: diverging
@@ -153,6 +161,7 @@ impl<'tcx> TypeVariableTable<'tcx> {
     }
 
     pub fn probe(&self, vid: ty::TyVid) -> Option<Ty<'tcx>> {
+        let vid = self.eq_relations.borrow_mut().find(vid);
         match self.values.get(vid.index as usize).value {
             Bounded { .. } => None,
             Known(t) => Some(t)
@@ -172,15 +181,20 @@ impl<'tcx> TypeVariableTable<'tcx> {
     }
 
     pub fn snapshot(&mut self) -> Snapshot {
-        Snapshot { snapshot: self.values.start_snapshot() }
+        Snapshot {
+            snapshot: self.values.start_snapshot(),
+            eq_snapshot: self.eq_relations.borrow_mut().snapshot(),
+        }
     }
 
     pub fn rollback_to(&mut self, s: Snapshot) {
         self.values.rollback_to(s.snapshot);
+        self.eq_relations.borrow_mut().rollback_to(s.eq_snapshot);
     }
 
     pub fn commit(&mut self, s: Snapshot) {
         self.values.commit(s.snapshot);
+        self.eq_relations.borrow_mut().commit(s.eq_snapshot);
     }
 
     pub fn types_escaping_snapshot(&self, s: &Snapshot) -> Vec<Ty<'tcx>> {

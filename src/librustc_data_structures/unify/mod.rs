@@ -77,7 +77,7 @@ pub struct Snapshot<K:UnifyKey> {
 }
 
 #[derive(Copy, Clone)]
-struct Delegate<K>(PhantomData<K>);
+pub struct Delegate<K>(PhantomData<K>);
 
 impl<K:UnifyKey> VarValue<K> {
     fn new_var(key: K, value: K::Value) -> VarValue<K> {
@@ -148,6 +148,12 @@ impl<K:UnifyKey> UnificationTable<K> {
     pub fn commit(&mut self, snapshot: Snapshot<K>) {
         debug!("{}: commit()", UnifyKey::tag(None::<K>));
         self.values.commit(snapshot.snapshot);
+    }
+
+    pub fn actions_since_snapshot(&self,
+                                  snapshot: &Snapshot<K>)
+                                  -> &[sv::UndoLog<Delegate<K>>] {
+        self.values.actions_since_snapshot(&snapshot.snapshot)
     }
 
     pub fn new_key(&mut self, value: K::Value) -> K {
