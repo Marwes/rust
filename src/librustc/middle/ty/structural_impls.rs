@@ -296,6 +296,14 @@ impl<'tcx> TypeFoldable<'tcx> for ty::TraitTy<'tcx> {
         }
     }
 
+    fn super_option_fold_with<F: TypeFolder<'tcx>>(&self, folder: &mut F) -> Option<Self> {
+        merge_folds(&self.principal, &self.bounds, folder, |principal, bounds, _|
+            ty::TraitTy {
+                principal: principal,
+                bounds: bounds,
+            })
+    }
+
     fn super_visit_with<V: TypeVisitor<'tcx>>(&self, visitor: &mut V) -> bool {
         self.principal.visit_with(visitor) || self.bounds.visit_with(visitor)
     }
@@ -412,6 +420,17 @@ impl<'tcx> TypeFoldable<'tcx> for ty::BareFnTy<'tcx> {
                        unsafety: self.unsafety }
     }
 
+    fn super_option_fold_with<F: TypeFolder<'tcx>>(&self, folder: &mut F) -> Option<Self> {
+        self.sig.option_fold_with(folder)
+            .map(|sig| {
+                ty::BareFnTy {
+                    sig: sig,
+                    abi: self.abi,
+                    unsafety: self.unsafety
+                }
+            })
+    }
+
     fn fold_with<F: TypeFolder<'tcx>>(&self, folder: &mut F) -> Self {
         folder.fold_bare_fn_ty(self)
     }
@@ -502,6 +521,16 @@ impl<'tcx> TypeFoldable<'tcx> for ty::TraitRef<'tcx> {
         }
     }
 
+    fn super_option_fold_with<F: TypeFolder<'tcx>>(&self, folder: &mut F) -> Option<Self> {
+        self.substs.option_fold_with(folder)
+            .map(|substs| {
+                ty::TraitRef {
+                    def_id: self.def_id,
+                    substs: folder.tcx().mk_substs(substs),
+                }
+            })
+    }
+
     fn fold_with<F: TypeFolder<'tcx>>(&self, folder: &mut F) -> Self {
         folder.fold_trait_ref(self)
     }
@@ -514,6 +543,10 @@ impl<'tcx> TypeFoldable<'tcx> for ty::TraitRef<'tcx> {
 impl<'tcx> TypeFoldable<'tcx> for ty::Region {
     fn super_fold_with<F: TypeFolder<'tcx>>(&self, _folder: &mut F) -> Self {
         *self
+    }
+
+    fn super_option_fold_with<F: TypeFolder<'tcx>>(&self, folder: &mut F) -> Option<Self> {
+        None
     }
 
     fn fold_with<F: TypeFolder<'tcx>>(&self, folder: &mut F) -> Self {
@@ -585,6 +618,15 @@ impl<'tcx> TypeFoldable<'tcx> for ty::ClosureSubsts<'tcx> {
             func_substs: folder.tcx().mk_substs(func_substs),
             upvar_tys: self.upvar_tys.fold_with(folder),
         }
+    }
+
+    fn super_option_fold_with<F: TypeFolder<'tcx>>(&self, folder: &mut F) -> Option<Self> {
+        merge_folds(&self.func_substs, &self.upvar_tys, |func_substs, upvar_tys, _| {
+            ty::ClosureSubsts {
+                func_substs: folder.tcx().mk_substs(func_substs),
+                upvar_tys: upvar_tys,
+            }
+        })
     }
 
     fn super_visit_with<V: TypeVisitor<'tcx>>(&self, visitor: &mut V) -> bool {
@@ -789,6 +831,16 @@ impl<'tcx> TypeFoldable<'tcx> for ty::ProjectionTy<'tcx> {
             trait_ref: self.trait_ref.fold_with(folder),
             item_name: self.item_name,
         }
+    }
+
+    fn super_option_fold_with<F: TypeFolder<'tcx>>(&self, folder: &mut F) -> Option<Self> {
+        self.trait_ref.fold_with(folder)
+            .map(|trait_ref| {
+                ty::ProjectionTy {
+                    trait_ref: trait_ref,
+                    item_name: self.item_name,
+                }
+            })
     }
 
     fn super_visit_with<V: TypeVisitor<'tcx>>(&self, visitor: &mut V) -> bool {

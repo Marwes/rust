@@ -60,6 +60,7 @@ pub trait TypeFoldable<'tcx>: fmt::Debug + Clone {
         self.super_fold_with(folder)
     }
 
+    /// Folds `self` conditionally allowing the type to return `None` when it has not been changed.
     fn option_fold_with<F: TypeFolder<'tcx>>(&self, folder: &mut F) -> Option<Self> {
         Some(self.fold_with(folder))
     }
@@ -144,7 +145,7 @@ pub trait TypeFolder<'tcx> : Sized {
     }
 
     fn fold_ty(&mut self, t: Ty<'tcx>) -> Ty<'tcx> {
-        t.super_fold_with(self)
+        t.option_super_fold_with(self).unwrap_or(t)
     }
 
     fn option_fold_ty(&mut self, t: Ty<'tcx>) -> Option<Ty<'tcx>> {
@@ -158,6 +159,7 @@ pub trait TypeFolder<'tcx> : Sized {
     fn fold_trait_ref(&mut self, t: &ty::TraitRef<'tcx>) -> ty::TraitRef<'tcx> {
         t.super_fold_with(self)
     }
+
 
     fn fold_substs(&mut self,
                    substs: &subst::Substs<'tcx>)
