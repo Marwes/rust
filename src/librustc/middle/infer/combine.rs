@@ -219,6 +219,7 @@ impl<'a, 'tcx> CombineFields<'a, 'tcx> {
             // Check whether `vid` has been instantiated yet.  If not,
             // make a generalized form of `ty` and instantiate with
             // that.
+            let b_vid = self.infcx.type_variables.borrow().parent_var(b_vid);
             let b_ty = self.infcx.type_variables.borrow().probe(b_vid);
             let b_ty = match b_ty {
                 Some(t) => t, // ...already instantiated.
@@ -307,6 +308,7 @@ impl<'cx, 'tcx> ty::fold::TypeFolder<'tcx> for Generalizer<'cx, 'tcx> {
         //  where `$1` has already been instantiated with `Box<$0>`)
         match t.sty {
             ty::TyInfer(ty::TyVar(vid)) => {
+                let vid = self.infcx.type_variables.borrow().parent_var(vid);
                 if vid == self.for_vid {
                     self.cycle_detected = true;
                     self.tcx().types.err

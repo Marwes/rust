@@ -61,13 +61,14 @@ enum UndoEntry<'tcx> {
     // The type of the var was specified.
     SpecifyVar(ty::TyVid, Vec<Relation>, Option<Default<'tcx>>),
     Relate(ty::TyVid, ty::TyVid),
+    RelateRange(ty::TyVid, usize),
 }
 
 struct Delegate<'tcx>(PhantomData<&'tcx ()>);
 
 type Relation = (RelationDir, ty::TyVid);
 
-#[derive(Copy, Clone, PartialEq, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub enum RelationDir {
     SubtypeOf, SupertypeOf, EqTo, BiTo
 }
@@ -110,9 +111,28 @@ impl<'tcx> TypeVariableTable<'tcx> {
     ///
     /// Precondition: neither `a` nor `b` are known.
     pub fn relate_vars(&mut self, a: ty::TyVid, dir: RelationDir, b: ty::TyVid) {
+        let a = self.parent_var(a);
+        let b = self.parent_var(b);
         if a != b {
             if dir == EqTo {
+                // a and b must be equal which we mark in the unification table
                 self.eq_relations.borrow_mut().union(a, b);
+                // In addition to being equal, all relations from the variable which is no longer
+                // the parent must be added to the parent so they are not forgotten
+                let parent = self.eq_relations.borrow_mut().find(a);
+                let other = if a == parent { b } else { a };
+                let count = {
+                    let (relations, parent_relations) = if other.index < parent.index {
+                        let (pre, post) = self.values.split_at_mut(parent.index as usize);
+                        (relations(&mut pre[other.index as usize]), relations(&mut post[0]))
+                    } else {
+                        let (pre, post) = self.values.split_at_mut(other.index as usize);
+                        (relations(&mut post[0]), relations(&mut pre[parent.index as usize]))
+                    };
+                    parent_relations.extend_from_slice(relations);
+                    relations.len()
+                };
+                self.values.record(RelateRange(parent, count));
             } else {
                 self.relations(a).push((dir, b));
                 self.relations(b).push((dir.opposite(), a));
@@ -130,6 +150,7 @@ impl<'tcx> TypeVariableTable<'tcx> {
         ty: Ty<'tcx>,
         stack: &mut Vec<(Ty<'tcx>, RelationDir, ty::TyVid)>)
     {
+        let vid = self.parent_var(vid);
         let old_value = {
             let value_ptr = &mut self.values.get_mut(vid.index as usize).value;
             mem::replace(value_ptr, Known(ty))
@@ -142,7 +163,7 @@ impl<'tcx> TypeVariableTable<'tcx> {
         };
 
         // Variables which have already been proven to be `ty` does not need to be inferred again
-        for &(dir, vid) in relations.iter().filter(|& &(_, vid)| self.probe(vid) != Some(ty)) {
+        for &(dir, vid) in relations.iter().filter(|rel| self.probe(rel.1) != Some(ty)) {
             stack.push((ty, dir, vid));
         }
 
@@ -160,8 +181,12 @@ impl<'tcx> TypeVariableTable<'tcx> {
         ty::TyVid { index: index as u32 }
     }
 
+    pub fn parent_var(&self, vid: ty::TyVid) -> ty::TyVid {
+        self.eq_relations.borrow_mut().find(vid)
+    }
+
     pub fn probe(&self, vid: ty::TyVid) -> Option<Ty<'tcx>> {
-        let vid = self.eq_relations.borrow_mut().find(vid);
+        let vid = self.parent_var(vid);
         match self.values.get(vid.index as usize).value {
             Bounded { .. } => None,
             Known(t) => Some(t)
@@ -268,6 +293,13 @@ impl<'tcx> sv::SnapshotVecDelegate for Delegate<'tcx> {
             Relate(a, b) => {
                 relations(&mut (*values)[a.index as usize]).pop();
                 relations(&mut (*values)[b.index as usize]).pop();
+            }
+
+            RelateRange(i, n) => {
+                let relations = relations(&mut (*values)[i.index as usize]);
+                for _ in 0..n {
+                    relations.pop();
+                }
             }
         }
     }
