@@ -118,7 +118,8 @@ impl<'tcx> TypeVariableTable<'tcx> {
                 // a and b must be equal which we mark in the unification table
                 self.eq_relations.borrow_mut().union(a, b);
                 // In addition to being equal, all relations from the variable which is no longer
-                // the parent must be added to the parent so they are not forgotten
+                // the parent must be added to the parent so they are not forgotten as the other
+                // variable should no longer be referenced (other than to get the parent)
                 let parent = self.eq_relations.borrow_mut().find(a);
                 let other = if a == parent { b } else { a };
                 let count = {
@@ -163,7 +164,7 @@ impl<'tcx> TypeVariableTable<'tcx> {
         };
 
         // Variables which have already been proven to be `ty` does not need to be inferred again
-        for &(dir, vid) in relations.iter().filter(|rel| self.probe(rel.1) != Some(ty)) {
+        for &(dir, vid) in &relations {
             stack.push((ty, dir, vid));
         }
 
@@ -266,12 +267,13 @@ impl<'tcx> TypeVariableTable<'tcx> {
     }
 
     pub fn unsolved_variables(&self) -> Vec<ty::TyVid> {
-        self.values
-            .iter()
-            .enumerate()
-            .filter_map(|(i, value)| match &value.value {
-                &TypeVariableValue::Known(_) => None,
-                &TypeVariableValue::Bounded { .. } => Some(ty::TyVid { index: i as u32 })
+        (0..self.values.len())
+            .filter_map(|i| {
+                let i = self.parent_var(ty::TyVid { index: i as u32 });
+                match self.values.get(i.index as usize).value {
+                    Known(_) => None,
+                    Bounded { .. } => Some(i),
+                }
             })
             .collect()
     }

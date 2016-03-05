@@ -210,6 +210,8 @@ impl<'a, 'tcx> CombineFields<'a, 'tcx> {
                 None => break,
                 Some(e) => e,
             };
+            // Get the actual variable that b_vid has been inferred to
+            let b_vid = self.infcx.type_variables.borrow().parent_var(b_vid);
 
             debug!("instantiate(a_ty={:?} dir={:?} b_vid={:?})",
                    a_ty,
@@ -219,7 +221,6 @@ impl<'a, 'tcx> CombineFields<'a, 'tcx> {
             // Check whether `vid` has been instantiated yet.  If not,
             // make a generalized form of `ty` and instantiate with
             // that.
-            let b_vid = self.infcx.type_variables.borrow().parent_var(b_vid);
             let b_ty = self.infcx.type_variables.borrow().probe(b_vid);
             let b_ty = match b_ty {
                 Some(t) => t, // ...already instantiated.
