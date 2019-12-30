@@ -563,12 +563,26 @@ impl<O: ForestObligation> ObligationForest<O> {
         P: ObligationProcessor<Obligation = O>,
     {
         let node = &self.nodes[index];
-        if node.state.get() == NodeState::Success {
-            match stack.iter().rposition(|&n| n == index) {
-                None => {
-                    stack.push(index);
-                    for &dep_index in node.dependents.iter() {
-                        self.find_cycles_from_node(stack, processor, dep_index);
+        if let NodeState::Success(waiting) = node.state.get() {
+            if !self.is_still_waiting(waiting) {
+                match stack.iter().rposition(|&n| n == index) {
+                    None => {
+                        stack.push(index);
+                        for &dep_index in node.dependents.iter() {
+                            // The index check avoids re-considering a node.
+                            if dep_index >= min_index {
+                                self.find_cycles_from_node(stack, processor, min_index, dep_index);
+                            }
+                        }
+                        stack.pop();
+                        node.state.set(NodeState::Success(Self::not_waiting()));
+                    }
+                    Some(rpos) => {
+                        // Cycle detected.
+                        processor.process_backedge(
+                            stack[rpos..].iter().map(GetObligation(&self.nodes)),
+                            PhantomData,
+                        );
                     }
                     stack.pop();
                     node.state.set(NodeState::Done);
