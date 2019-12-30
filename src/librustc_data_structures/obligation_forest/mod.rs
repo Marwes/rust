@@ -593,14 +593,11 @@ impl<O: ForestObligation> ObligationForest<O> {
             None => {
                 stack.push(index);
                 for &dep_index in node.dependents.iter() {
-                    // The index check avoids re-considering a node.
-                    if dep_index >= min_index {
-                        let dep_node = &self.nodes[dep_index];
-                        if self.success_node_is_not_waiting(dep_node) {
-                            self.find_cycles_from_success_node(
-                                stack, processor, min_index, dep_node, dep_index,
-                            );
-                        }
+                    let dep_node = &self.nodes[dep_index];
+                    if self.success_node_is_not_waiting(dep_node) {
+                        self.find_cycles_from_success_node(
+                            stack, processor, min_index, dep_node, dep_index,
+                        );
                     }
                     stack.pop();
                     node.state.set(NodeState::Done);
@@ -613,6 +610,7 @@ impl<O: ForestObligation> ObligationForest<O> {
                     );
                 }
                 stack.pop();
+                // Mark as "Done" so we do not process it again
                 node.state.set(NodeState::Success(Self::not_waiting()));
             }
             Some(rpos) => {
