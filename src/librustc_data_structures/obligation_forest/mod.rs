@@ -383,6 +383,26 @@ impl<O: ForestObligation> ObligationForest<O> {
             .insert(node.obligation.as_predicate().clone());
     }
 
+    fn not_waiting() -> WaitingState {
+        WaitingState(0)
+    }
+
+    fn still_waiting(&self) -> WaitingState {
+        WaitingState(self.gen)
+    }
+
+    fn success_node_is_not_waiting(&self, node: &Node<O>) -> bool {
+        if let NodeState::Success(waiting) = node.state.get() {
+            !self.is_still_waiting(waiting)
+        } else {
+            false
+        }
+    }
+
+    fn is_still_waiting(&self, waiting: WaitingState) -> bool {
+        waiting.0 == self.gen
+    }
+
     /// Performs a pass through the obligation list. This must
     /// be called in a loop until `outcome.stalled` is false.
     ///
@@ -550,39 +570,37 @@ impl<O: ForestObligation> ObligationForest<O> {
             // For some benchmarks this state test is extremely hot. It's a win
             // to handle the no-op cases immediately to avoid the cost of the
             // function call.
-            if node.state.get() == NodeState::Success {
-                self.find_cycles_from_node(&mut stack, processor, index);
+            if self.success_node_is_not_waiting(node) {
+                self.find_cycles_from_success_node(&mut stack, processor, index, node, index);
             }
         }
 
         debug_assert!(stack.is_empty());
     }
 
-    fn find_cycles_from_node<P>(&self, stack: &mut Vec<usize>, processor: &mut P, index: usize)
-    where
+    fn find_cycles_from_success_node<P>(
+        &self,
+        stack: &mut Vec<usize>,
+        processor: &mut P,
+        min_index: usize,
+        node: &Node<O>,
+        index: usize,
+    ) where
         P: ObligationProcessor<Obligation = O>,
     {
-        let node = &self.nodes[index];
-        if let NodeState::Success(waiting) = node.state.get() {
-            if !self.is_still_waiting(waiting) {
-                match stack.iter().rposition(|&n| n == index) {
-                    None => {
-                        stack.push(index);
-                        for &dep_index in node.dependents.iter() {
-                            // The index check avoids re-considering a node.
-                            if dep_index >= min_index {
-                                self.find_cycles_from_node(stack, processor, min_index, dep_index);
-                            }
+        debug_assert!(self.success_node_is_not_waiting(node));
+        match stack.iter().rposition(|&n| n == index) {
+            None => {
+                stack.push(index);
+                for &dep_index in node.dependents.iter() {
+                    // The index check avoids re-considering a node.
+                    if dep_index >= min_index {
+                        let dep_node = &self.nodes[dep_index];
+                        if self.success_node_is_not_waiting(dep_node) {
+                            self.find_cycles_from_success_node(
+                                stack, processor, min_index, dep_node, dep_index,
+                            );
                         }
-                        stack.pop();
-                        node.state.set(NodeState::Success(Self::not_waiting()));
-                    }
-                    Some(rpos) => {
-                        // Cycle detected.
-                        processor.process_backedge(
-                            stack[rpos..].iter().map(GetObligation(&self.nodes)),
-                            PhantomData,
-                        );
                     }
                     stack.pop();
                     node.state.set(NodeState::Done);
@@ -594,6 +612,15 @@ impl<O: ForestObligation> ObligationForest<O> {
                         PhantomData,
                     );
                 }
+                stack.pop();
+                node.state.set(NodeState::Success(Self::not_waiting()));
+            }
+            Some(rpos) => {
+                // Cycle detected.
+                processor.process_backedge(
+                    stack[rpos..].iter().map(GetObligation(&self.nodes)),
+                    PhantomData,
+                );
             }
         }
     }
