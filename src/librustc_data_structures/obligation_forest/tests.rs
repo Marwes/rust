@@ -329,11 +329,14 @@ fn diamond() {
 
     let Outcome { completed: ok, errors: err, .. } = forest.process_obligations(
         &mut C(
-            |obligation| match *obligation {
-                "A'.1" => ProcessResult::Changed(vec!["D'", "A'"]),
-                "A'.2" => ProcessResult::Changed(vec!["D'"]),
-                "D'" | "A'" => ProcessResult::Unchanged,
-                _ => unreachable!(),
+            |obligation| {
+                eprintln!("{}", obligation);
+                match *obligation {
+                    "A'.1" => ProcessResult::Changed(vec!["D'", "A'"]),
+                    "A'.2" => ProcessResult::Changed(vec!["D'"]),
+                    "D'" | "A'" => ProcessResult::Unchanged,
+                    _ => unreachable!(),
+                }
             },
             |_| {},
         ),

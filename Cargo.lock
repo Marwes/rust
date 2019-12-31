@@ -1082,6 +1082,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "fixedbitset"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "37ab347416e802de484e4d03c7316c48f1ecb56574dfd4a46a80f173ce1de04d"
+
+[[package]]
 name = "flate2"
 version = "1.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2418,6 +2424,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "petgraph"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "29c127eea4a29ec6c85d153c59dc1213f33ec74cead30fe4730aecc88cc1fd92"
+dependencies = [
+ "fixedbitset",
+ "indexmap",
+]
+
+[[package]]
 name = "phf"
 version = "0.7.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3477,6 +3493,7 @@ dependencies = [
  "log",
  "measureme",
  "parking_lot",
+ "petgraph",
  "rustc-hash",
  "rustc-rayon",
  "rustc-rayon-core",

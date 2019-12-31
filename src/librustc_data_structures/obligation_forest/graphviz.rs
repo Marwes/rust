@@ -1,4 +1,4 @@
-use crate::obligation_forest::{ForestObligation, ObligationForest};
+use crate::obligation_forest::{ForestObligation, NodeIndex, ObligationForest};
 use graphviz as dot;
 use std::env::var_os;
 use std::fs::File;
@@ -50,7 +50,7 @@ impl<'a, O: ForestObligation + 'a> dot::Labeller<'a> for &'a ObligationForest<O>
     }
 
     fn node_label(&self, index: &Self::Node) -> dot::LabelText<'_> {
-        let node = &self.nodes[*index];
+        let node = &self.nodes[NodeIndex::new(*index)];
         let label = format!("{:?} ({:?})", node.obligation.as_predicate(), node.state.get());
 
         dot::LabelText::LabelStr(label.into())
@@ -66,16 +66,13 @@ impl<'a, O: ForestObligation + 'a> dot::GraphWalk<'a> for &'a ObligationForest<O
     type Edge = (usize, usize);
 
     fn nodes(&self) -> dot::Nodes<'_, Self::Node> {
-        (0..self.nodes.len()).collect()
+        self.nodes.node_indices().map(|n| n.index()).collect()
     }
 
     fn edges(&self) -> dot::Edges<'_, Self::Edge> {
-        (0..self.nodes.len())
-            .flat_map(|i| {
-                let node = &self.nodes[i];
-
-                node.dependents.iter().map(move |&d| (d, i))
-            })
+        self.nodes
+            .node_indices()
+            .flat_map(|i| self.nodes.neighbors(i).map(move |d| (d.index(), i.index())))
             .collect()
     }
 
