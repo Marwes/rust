@@ -343,7 +343,7 @@ fn diamond() {
     assert_eq!(err.len(), 0);
 
     let mut d_count = 0;
-    let Outcome { completed: _ok, errors: err, .. } = forest.process_obligations(
+    let Outcome { completed: ok, errors: err, .. } = forest.process_obligations(
         &mut C(
             |obligation| match *obligation {
                 "D'" => {
@@ -357,6 +357,7 @@ fn diamond() {
         DoCompleted::Yes,
     );
     assert_eq!(d_count, 1);
+    assert_eq!(ok.unwrap().len(), 0);
     assert_eq!(
         err,
         vec![super::Error { error: "operation failed", backtrace: vec!["D'", "A'.1", "A'"] }]

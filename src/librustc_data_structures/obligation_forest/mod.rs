@@ -146,6 +146,8 @@ pub struct ObligationForest<O: ForestObligation> {
     /// comments in `process_obligation` for details.
     active_cache: FxHashMap<O::Predicate, NodeIndex>,
 
+    /// The order in which the nodes currently in the graph where created
+    /// Necessary to keep a consistent ordering in the face of removals and insertions.
     node_order: Vec<NodeIndex>,
 
     /// A vector reused in compress(), to avoid allocating new vectors.
@@ -356,9 +358,9 @@ impl<O: ForestObligation> ObligationForest<O> {
     /// Converts all remaining obligations to the given error.
     pub fn to_errors<E: Clone>(&mut self, error: E) -> Vec<Error<O, E>> {
         let errors = self
-            .nodes
-            .node_indices()
-            .filter_map(|index| {
+            .node_order
+            .iter()
+            .filter_map(|&index| {
                 if self.nodes[index].state.get() == NodeState::Pending {
                     Some(Error { error: error.clone(), backtrace: self.error_at(index) })
                 } else {
@@ -377,9 +379,9 @@ impl<O: ForestObligation> ObligationForest<O> {
     where
         F: Fn(&O) -> P,
     {
-        self.nodes
-            .node_indices()
-            .map(|i| &self.nodes[i])
+        self.node_order
+            .iter()
+            .map(|&i| &self.nodes[i])
             .filter(|node| node.state.get() == NodeState::Pending)
             .map(|node| f(&node.obligation))
             .collect()
@@ -425,6 +427,9 @@ impl<O: ForestObligation> ObligationForest<O> {
     where
         P: ObligationProcessor<Obligation = O>,
     {
+        self.gen += 1;
+        eprintln!("GEN {}", self.gen);
+
         let mut errors = vec![];
         let mut stalled = true;
 
@@ -439,6 +444,7 @@ impl<O: ForestObligation> ObligationForest<O> {
         let mut i = 0;
         while let Some(&index) = self.node_order.get(i) {
             let node = &mut self.nodes[index];
+            eprintln!("Process {:?}", node.obligation);
 
             // `processor.process_obligation` can modify the predicate within
             // `node.obligation`, and that predicate is the key used for
@@ -459,6 +465,7 @@ impl<O: ForestObligation> ObligationForest<O> {
                     stalled = false;
                     node.state.set(NodeState::Success);
 
+                    eprintln!("Change {:?}", children);
                     for child in children {
                         if let Err(()) = self.register_obligation_at(child, Some(index)) {
                             // Error already reported - propagate it
@@ -526,7 +533,7 @@ impl<O: ForestObligation> ObligationForest<O> {
     /// waiting. Upon completion, any `Success` nodes that aren't still waiting
     /// can be removed by `compress`.
     fn mark_still_waiting_nodes(&self) {
-        for index in self.nodes.node_indices() {
+        for &index in &self.node_order {
             let node = &self.nodes[index];
             if node.state.get() == NodeState::Pending {
                 // This call site is hot.
@@ -562,7 +569,7 @@ impl<O: ForestObligation> ObligationForest<O> {
     {
         let mut stack = vec![];
 
-        for index in self.nodes.node_indices() {
+        for &index in &self.node_order {
             let node = &self.nodes[index];
             // For some benchmarks this state test is extremely hot. It's a win
             // to handle the no-op cases immediately to avoid the cost of the
@@ -631,6 +638,7 @@ impl<O: ForestObligation> ObligationForest<O> {
         let node_order = mem::take(&mut self.node_order);
         for &index in &node_order {
             let node = &self.nodes[index];
+            eprintln!("Compress {:?} {:?}", index, node);
             match node.state.get() {
                 NodeState::Pending => (),
                 NodeState::Success(waiting) if self.is_still_waiting(waiting) => (),
