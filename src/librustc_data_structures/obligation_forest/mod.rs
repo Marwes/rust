@@ -428,7 +428,6 @@ impl<O: ForestObligation> ObligationForest<O> {
         P: ObligationProcessor<Obligation = O>,
     {
         self.gen += 1;
-        eprintln!("GEN {}", self.gen);
 
         let mut errors = vec![];
         let mut stalled = true;
@@ -444,7 +443,6 @@ impl<O: ForestObligation> ObligationForest<O> {
         let mut i = 0;
         while let Some(&index) = self.node_order.get(i) {
             let node = &mut self.nodes[index];
-            eprintln!("Process {:?}", node.obligation);
 
             // `processor.process_obligation` can modify the predicate within
             // `node.obligation`, and that predicate is the key used for
@@ -465,7 +463,6 @@ impl<O: ForestObligation> ObligationForest<O> {
                     stalled = false;
                     node.state.set(NodeState::Success);
 
-                    eprintln!("Change {:?}", children);
                     for child in children {
                         if let Err(()) = self.register_obligation_at(child, Some(index)) {
                             // Error already reported - propagate it
@@ -510,8 +507,8 @@ impl<O: ForestObligation> ObligationForest<O> {
             node.state.set(NodeState::Error);
             trace.push(node.obligation.clone());
             if let Some(parent) = node.parent {
-                index = parent;
                 error_stack.extend(self.nodes.neighbors(index).filter(|i| *i != parent));
+                index = parent;
             } else {
                 error_stack.extend(self.nodes.neighbors(index));
                 break;
@@ -638,7 +635,6 @@ impl<O: ForestObligation> ObligationForest<O> {
         let node_order = mem::take(&mut self.node_order);
         for &index in &node_order {
             let node = &self.nodes[index];
-            eprintln!("Compress {:?} {:?}", index, node);
             match node.state.get() {
                 NodeState::Pending => (),
                 NodeState::Success(waiting) if self.is_still_waiting(waiting) => (),
