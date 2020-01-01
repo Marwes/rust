@@ -79,6 +79,7 @@ use std::collections::hash_map::Entry;
 use std::fmt::Debug;
 use std::hash;
 use std::marker::PhantomData;
+use std::mem;
 
 mod graphviz;
 
@@ -144,6 +145,8 @@ pub struct ObligationForest<O: ForestObligation> {
     /// its contents are not guaranteed to match those of `nodes`. See the
     /// comments in `process_obligation` for details.
     active_cache: FxHashMap<O::Predicate, NodeIndex>,
+
+    node_order: Vec<NodeIndex>,
 
     /// A vector reused in compress(), to avoid allocating new vectors.
     removals: RefCell<Vec<bool>>,
@@ -277,6 +280,7 @@ impl<O: ForestObligation> ObligationForest<O> {
             gen: 0,
             done_cache: Default::default(),
             active_cache: Default::default(),
+            node_order: Default::default(),
             obligation_tree_id_generator: (0..).map(ObligationTreeId),
             error_cache: Default::default(),
             removals: Default::default(),
@@ -300,9 +304,9 @@ impl<O: ForestObligation> ObligationForest<O> {
         &mut self,
         obligation: O,
         parent: Option<NodeIndex>,
-    ) -> Result<Option<NodeIndex>, ()> {
+    ) -> Result<(), ()> {
         if self.done_cache.contains(obligation.as_predicate()) {
-            return Ok(None);
+            return Ok(());
         }
 
         match self.active_cache.entry(obligation.as_predicate().clone()) {
@@ -318,7 +322,7 @@ impl<O: ForestObligation> ObligationForest<O> {
                     }
                 }
                 let node = &self.nodes[index];
-                if let NodeState::Error = node.state.get() { Err(()) } else { Ok(None) }
+                if let NodeState::Error = node.state.get() { Err(()) } else { Ok(()) }
             }
             Entry::Vacant(v) => {
                 let obligation_tree_id = match parent {
@@ -338,15 +342,12 @@ impl<O: ForestObligation> ObligationForest<O> {
                 } else {
                     let new_index =
                         self.nodes.add_node(Node::new(parent, obligation, obligation_tree_id));
+                    self.node_order.push(new_index);
                     v.insert(new_index);
                     if let Some(parent) = parent {
-                        eprintln!(
-                            "{:?} {:?}",
-                            self.nodes[parent].obligation, self.nodes[new_index].obligation
-                        );
                         self.nodes.add_edge(new_index, parent, ());
                     }
-                    Ok(Some(new_index))
+                    Ok(())
                 }
             }
         }
@@ -435,8 +436,8 @@ impl<O: ForestObligation> ObligationForest<O> {
         // `for index in 0..self.nodes.len() { ... }` because the range would
         // be computed with the initial length, and we would miss the appended
         // nodes. Therefore we use a `while` loop.
-        let mut to_visit: Vec<_> = self.nodes.node_indices().rev().collect();
-        while let Some(index) = to_visit.pop() {
+        let mut i = 0;
+        while let Some(&index) = self.node_order.get(i) {
             let node = &mut self.nodes[index];
 
             // `processor.process_obligation` can modify the predicate within
@@ -445,6 +446,7 @@ impl<O: ForestObligation> ObligationForest<O> {
             // out of sync with `nodes`. It's not very common, but it does
             // happen, and code in `compress` has to allow for it.
             if node.state.get() != NodeState::Pending {
+                i += 1;
                 continue;
             }
 
@@ -458,13 +460,10 @@ impl<O: ForestObligation> ObligationForest<O> {
                     node.state.set(NodeState::Success);
 
                     for child in children {
-                        match self.register_obligation_at(child, Some(index)) {
-                            Ok(new_index) => to_visit.extend(new_index),
-                            Err(()) => {
-                                // Error already reported - propagate it
-                                // to our node.
-                                self.error_at(index);
-                            }
+                        if let Err(()) = self.register_obligation_at(child, Some(index)) {
+                            // Error already reported - propagate it
+                            // to our node.
+                            self.error_at(index);
                         }
                     }
                 }
@@ -473,6 +472,7 @@ impl<O: ForestObligation> ObligationForest<O> {
                     errors.push(Error { error: err, backtrace: self.error_at(index) });
                 }
             }
+            i += 1;
         }
 
         if stalled {
@@ -626,11 +626,10 @@ impl<O: ForestObligation> ObligationForest<O> {
 
         let mut removals = self.removals.replace(vec![]);
         removals.clear();
+        removals.resize(self.node_order.iter().max().map_or(0, |i| i.index() + 1), false);
 
-        // FIXME
-        let indices = self.nodes.node_indices().collect::<Vec<_>>();
-        removals.resize(indices.iter().max().map_or(0, |i| i.index() + 1), false);
-        for index in indices {
+        let node_order = mem::take(&mut self.node_order);
+        for &index in &node_order {
             let node = &self.nodes[index];
             match node.state.get() {
                 NodeState::Pending => (),
@@ -665,6 +664,7 @@ impl<O: ForestObligation> ObligationForest<O> {
                 NodeState::Success => unreachable!(),
             }
         }
+        self.node_order = node_order;
 
         self.nodes.retain_nodes(|mut nodes, index| {
             let node = &mut nodes[index];
@@ -677,6 +677,7 @@ impl<O: ForestObligation> ObligationForest<O> {
         });
 
         self.active_cache.retain(|_predicate, index| !removals[index.index()]);
+        self.node_order.retain(|index| !removals[index.index()]);
 
         self.removals.replace(removals);
 
