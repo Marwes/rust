@@ -530,93 +530,36 @@ impl<O: ForestObligation> ObligationForest<O> {
     /// waiting. Upon completion, any `Success` nodes that aren't still waiting
     /// can be removed by `compress`.
     fn mark_still_waiting_nodes(&self) {
-        for &index in &self.node_order {
-            let node = &self.nodes[index];
-            if node.state.get() == NodeState::Pending {
-                // This call site is hot.
-                self.inlined_mark_dependents_as_still_waiting(index);
+        let mut dfs = petgraph::visit::Dfs::empty(&self.nodes);
+        for &top_index in &self.node_order {
+            let top_node = &self.nodes[top_index];
+            if top_node.state.get() == NodeState::Pending {
+                dfs.move_to(top_index);
+                while let Some(index) = dfs.next(&self.nodes) {
+                    if self.success_node_is_not_waiting(&self.nodes[index]) {
+                        let node = &self.nodes[index];
+                        node.state.set(NodeState::Success(self.still_waiting()));
+                    }
+                }
             }
         }
     }
 
-    // This always-inlined function is for the hot call site.
-    #[inline(always)]
-    fn inlined_mark_dependents_as_still_waiting(&self, index: NodeIndex) {
-        for index in self.nodes.neighbors(index) {
-            let node = &self.nodes[index];
-            if self.success_node_is_not_waiting(node) {
-                node.state.set(NodeState::Success(self.still_waiting()));
-                // This call site is cold.
-                self.uninlined_mark_dependents_as_still_waiting(index);
-            }
-        }
-    }
-
-    // This never-inlined function is for the cold call site.
-    #[inline(never)]
-    fn uninlined_mark_dependents_as_still_waiting(&self, node: NodeIndex) {
-        self.inlined_mark_dependents_as_still_waiting(node)
-    }
-
-    /// Report cycles between all `Success` nodes, and convert all `Success`
-    /// nodes to `Done`. This must be called after `mark_successes`.
+    /// Report cycles between all `Success` nodes that aren't still waiting.
+    /// This must be called after `mark_still_waiting_nodes`.
     fn process_cycles<P>(&self, processor: &mut P)
     where
         P: ObligationProcessor<Obligation = O>,
     {
-        let mut stack = vec![];
+        let graph = petgraph::visit::NodeFiltered::from_fn(&self.nodes, |index| {
+            self.success_node_is_not_waiting(&self.nodes[index])
+        });
 
-        for &index in &self.node_order {
-            let node = &self.nodes[index];
-            // For some benchmarks this state test is extremely hot. It's a win
-            // to handle the no-op cases immediately to avoid the cost of the
-            // function call.
-            if self.success_node_is_not_waiting(node) {
-                self.find_cycles_from_success_node(&mut stack, processor, node, index);
-            }
-        }
-
-        debug_assert!(stack.is_empty());
-    }
-
-    fn find_cycles_from_success_node<P>(
-        &self,
-        stack: &mut Vec<NodeIndex>,
-        processor: &mut P,
-        node: &Node<O>,
-        index: NodeIndex,
-    ) where
-        P: ObligationProcessor<Obligation = O>,
-    {
-        debug_assert!(self.success_node_is_not_waiting(node));
-        match stack.iter().rposition(|&n| n == index) {
-            None => {
-                stack.push(index);
-                for dep_index in self.nodes.neighbors(index) {
-                    let dep_node = &self.nodes[dep_index];
-                    if self.success_node_is_not_waiting(dep_node) {
-                        self.find_cycles_from_success_node(stack, processor, dep_node, dep_index);
-                    }
-                    stack.pop();
-                    node.state.set(NodeState::Done);
-                }
-                Some(rpos) => {
-                    // Cycle detected.
-                    processor.process_backedge(
-                        stack[rpos..].iter().map(GetObligation(&self.nodes)),
-                        PhantomData,
-                    );
-                }
-                stack.pop();
-                // Mark as "Done" so we do not process it again
-                node.state.set(NodeState::Success(Self::not_waiting()));
-            }
-            Some(rpos) => {
+        for scc in petgraph::algo::tarjan_scc(&graph) {
+            if scc.len() > 1 {
                 // Cycle detected.
-                processor.process_backedge(
-                    stack[rpos..].iter().map(|i| &self.nodes[*i].obligation),
-                    PhantomData,
-                );
+                processor
+                    .process_backedge(scc.iter().map(|i| &self.nodes[*i].obligation), PhantomData);
             }
         }
     }
