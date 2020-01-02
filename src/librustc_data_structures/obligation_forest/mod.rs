@@ -128,6 +128,8 @@ struct ObligationTreeId(usize);
 type ObligationTreeIdGenerator =
     ::std::iter::Map<::std::ops::RangeFrom<usize>, fn(usize) -> ObligationTreeId>;
 
+type ObligationGraph<O> = petgraph::stable_graph::StableDiGraph<Node<O>, (), usize>;
+
 pub struct ObligationForest<O: ForestObligation> {
     /// The list of obligations. In between calls to `process_obligations`,
     /// this list only contains nodes in the `Pending` or `Waiting` state.
@@ -136,7 +138,7 @@ pub struct ObligationForest<O: ForestObligation> {
     /// `rustc_index::newtype_index!` indices, because this code is hot enough
     /// that the `u32`-to-`usize` conversions that would be required are
     /// significant, and space considerations are not important.
-    nodes: petgraph::stable_graph::StableDiGraph<Node<O>, (), usize>,
+    nodes: ObligationGraph<O>,
 
     /// A cache of predicates that have been successfully completed.
     done_cache: FxHashSet<O::Predicate>,
@@ -152,6 +154,11 @@ pub struct ObligationForest<O: ForestObligation> {
 
     /// A vector reused in compress(), to avoid allocating new vectors.
     removals: RefCell<Vec<bool>>,
+
+    /// A Dfs that is reused to avoid allocating it.
+    dfs: RefCell<
+        petgraph::visit::Dfs<NodeIndex, <ObligationGraph<O> as petgraph::visit::Visitable>::Map>,
+    >,
 
     obligation_tree_id_generator: ObligationTreeIdGenerator,
 
@@ -284,6 +291,10 @@ impl<O: ForestObligation> ObligationForest<O> {
             active_cache: Default::default(),
             node_order: Default::default(),
             obligation_tree_id_generator: (0..).map(ObligationTreeId),
+            dfs: RefCell::new(petgraph::visit::Dfs::from_parts(
+                Default::default(),
+                Default::default(),
+            )),
             error_cache: Default::default(),
             removals: Default::default(),
         }
@@ -498,29 +509,26 @@ impl<O: ForestObligation> ObligationForest<O> {
 
     /// Returns a vector of obligations for `p` and all of its
     /// ancestors, putting them into the error state in the process.
-    fn error_at(&self, mut index: NodeIndex) -> Vec<O> {
-        let mut error_stack: Vec<NodeIndex> = vec![];
+    fn error_at(&self, start: NodeIndex) -> Vec<O> {
         let mut trace = vec![];
 
+        let mut index = start;
         loop {
             let node = &self.nodes[index];
-            node.state.set(NodeState::Error);
             trace.push(node.obligation.clone());
             if let Some(parent) = node.parent {
-                error_stack.extend(self.nodes.neighbors(index).filter(|i| *i != parent));
                 index = parent;
             } else {
-                error_stack.extend(self.nodes.neighbors(index));
                 break;
             }
         }
 
-        while let Some(index) = error_stack.pop() {
+        let mut dfs = self.dfs.borrow_mut();
+        dfs.reset(&self.nodes);
+        dfs.move_to(start);
+        while let Some(index) = dfs.next(&self.nodes) {
             let node = &self.nodes[index];
-            if node.state.get() != NodeState::Error {
-                node.state.set(NodeState::Error);
-                error_stack.extend(self.nodes.neighbors(index));
-            }
+            node.state.set(NodeState::Error);
         }
 
         trace
@@ -530,7 +538,9 @@ impl<O: ForestObligation> ObligationForest<O> {
     /// waiting. Upon completion, any `Success` nodes that aren't still waiting
     /// can be removed by `compress`.
     fn mark_still_waiting_nodes(&self) {
-        let mut dfs = petgraph::visit::Dfs::empty(&self.nodes);
+        let mut dfs = self.dfs.borrow_mut();
+
+        dfs.reset(&self.nodes);
         for &top_index in &self.node_order {
             let top_node = &self.nodes[top_index];
             if top_node.state.get() == NodeState::Pending {
