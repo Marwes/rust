@@ -120,6 +120,26 @@ pub fn elaborate_predicates<'tcx>(
 }
 
 impl Elaborator<'tcx> {
+    pub fn new(tcx: TyCtxt<'tcx>) -> Self {
+        Self { stack: Vec::new(), visited: PredicateSet::new(tcx) }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.stack.is_empty()
+    }
+
+    pub fn filter_next(
+        &mut self,
+        mut predicates: impl Iterator<Item = ty::Predicate<'tcx>>,
+    ) -> Option<ty::Predicate<'tcx>> {
+        let predicate = self
+            .stack
+            .pop()
+            .or_else(|| predicates.find(|predicate| self.visited.insert(&predicate)))?;
+        self.elaborate(&predicate);
+        Some(predicate)
+    }
+
     pub fn filter_to_traits(self) -> FilterToTraits<Self> {
         FilterToTraits::new(self)
     }

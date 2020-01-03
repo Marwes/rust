@@ -561,15 +561,50 @@ impl<O: ForestObligation> ObligationForest<O> {
     where
         P: ObligationProcessor<Obligation = O>,
     {
-        let graph = petgraph::visit::NodeFiltered::from_fn(&self.nodes, |index| {
-            self.success_node_is_not_waiting(&self.nodes[index])
-        });
+        let mut stack = vec![];
 
-        for scc in petgraph::algo::tarjan_scc(&graph) {
-            if scc.len() > 1 {
+        for &index in &self.node_order {
+            let node = &self.nodes[index];
+            // For some benchmarks this state test is extremely hot. It's a win
+            // to handle the no-op cases immediately to avoid the cost of the
+            // function call.
+            if self.success_node_is_not_waiting(node) {
+                self.find_cycles_from_success_node(&mut stack, processor, node, index);
+            }
+        }
+
+        debug_assert!(stack.is_empty());
+    }
+
+    fn find_cycles_from_success_node<P>(
+        &self,
+        stack: &mut Vec<NodeIndex>,
+        processor: &mut P,
+        node: &Node<O>,
+        index: NodeIndex,
+    ) where
+        P: ObligationProcessor<Obligation = O>,
+    {
+        debug_assert!(self.success_node_is_not_waiting(node));
+        match stack.iter().rposition(|&n| n == index) {
+            None => {
+                stack.push(index);
+                for dep_index in self.nodes.neighbors(index).collect::<Vec<_>>().into_iter().rev() {
+                    let dep_node = &self.nodes[dep_index];
+                    if self.success_node_is_not_waiting(dep_node) {
+                        self.find_cycles_from_success_node(stack, processor, dep_node, dep_index);
+                    }
+                }
+                stack.pop();
+                // Mark as "Done" so we do not process it again
+                node.state.set(NodeState::Success(Self::not_waiting()));
+            }
+            Some(rpos) => {
                 // Cycle detected.
-                processor
-                    .process_backedge(scc.iter().map(|i| &self.nodes[*i].obligation), PhantomData);
+                processor.process_backedge(
+                    stack[rpos..].iter().map(|i| &self.nodes[*i].obligation),
+                    PhantomData,
+                );
             }
         }
     }

@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+
 use crate::hir::def_id::DefId;
 use crate::infer::outlives::env::RegionBoundPairs;
 use crate::infer::{GenericKind, VerifyBound};
@@ -17,6 +19,7 @@ pub struct VerifyBoundCx<'cx, 'tcx> {
     region_bound_pairs: &'cx RegionBoundPairs<'tcx>,
     implicit_region_bound: Option<ty::Region<'tcx>>,
     param_env: ty::ParamEnv<'tcx>,
+    elaborator: RefCell<traits::Elaborator<'tcx>>,
 }
 
 impl<'cx, 'tcx> VerifyBoundCx<'cx, 'tcx> {
@@ -26,7 +29,13 @@ impl<'cx, 'tcx> VerifyBoundCx<'cx, 'tcx> {
         implicit_region_bound: Option<ty::Region<'tcx>>,
         param_env: ty::ParamEnv<'tcx>,
     ) -> Self {
-        Self { tcx, region_bound_pairs, implicit_region_bound, param_env }
+        Self {
+            tcx,
+            region_bound_pairs,
+            implicit_region_bound,
+            param_env,
+            elaborator: RefCell::new(traits::Elaborator::new(tcx)),
+        }
     }
 
     /// Returns a "verify bound" that encodes what we know about
@@ -95,10 +104,13 @@ impl<'cx, 'tcx> VerifyBoundCx<'cx, 'tcx> {
     /// Searches the where-clauses in scope for regions that
     /// `projection_ty` is known to outlive. Currently requires an
     /// exact match.
-    pub fn projection_declared_bounds_from_trait(
-        &self,
+    pub fn projection_declared_bounds_from_trait<'a>(
+        &'a self,
         projection_ty: ty::ProjectionTy<'tcx>,
-    ) -> impl Iterator<Item = ty::Region<'tcx>> + 'cx + Captures<'tcx> {
+    ) -> impl Iterator<Item = ty::Region<'tcx>> + 'cx + Captures<'tcx> + 'a
+    where
+        'a: 'cx,
+    {
         self.declared_projection_bounds_from_trait(projection_ty)
     }
 
@@ -225,10 +237,13 @@ impl<'cx, 'tcx> VerifyBoundCx<'cx, 'tcx> {
     /// then this function would return `'x`. This is subject to the
     /// limitations around higher-ranked bounds described in
     /// `region_bounds_declared_on_associated_item`.
-    fn declared_projection_bounds_from_trait(
-        &self,
+    fn declared_projection_bounds_from_trait<'a>(
+        &'a self,
         projection_ty: ty::ProjectionTy<'tcx>,
-    ) -> impl Iterator<Item = ty::Region<'tcx>> + 'cx + Captures<'tcx> {
+    ) -> impl Iterator<Item = ty::Region<'tcx>> + 'cx + Captures<'tcx> + 'a
+    where
+        'a: 'cx,
+    {
         debug!("projection_bounds(projection_ty={:?})", projection_ty);
         let tcx = self.tcx;
         self.region_bounds_declared_on_associated_item(projection_ty.item_def_id)
@@ -265,20 +280,26 @@ impl<'cx, 'tcx> VerifyBoundCx<'cx, 'tcx> {
     ///
     /// This is for simplicity, and because we are not really smart
     /// enough to cope with such bounds anywhere.
-    fn region_bounds_declared_on_associated_item(
-        &self,
+    fn region_bounds_declared_on_associated_item<'a>(
+        &'a self,
         assoc_item_def_id: DefId,
-    ) -> impl Iterator<Item = ty::Region<'tcx>> + 'cx + Captures<'tcx> {
+    ) -> impl Iterator<Item = ty::Region<'tcx>> + 'cx + Captures<'tcx> + 'a
+    where
+        'a: 'cx,
+    {
         let tcx = self.tcx;
         let assoc_item = tcx.associated_item(assoc_item_def_id);
         let trait_def_id = assoc_item.container.assert_trait();
-        let trait_predicates =
-            tcx.predicates_of(trait_def_id).predicates.iter().map(|(p, _)| *p).collect();
+        let mut trait_predicates =
+            tcx.predicates_of(trait_def_id).predicates.iter().map(|(p, _)| *p);
         let identity_substs = InternalSubsts::identity_for_item(tcx, assoc_item_def_id);
         let identity_proj = tcx.mk_projection(assoc_item_def_id, identity_substs);
+
+        let mut elaborator = self.elaborator.borrow_mut();
+        assert!(elaborator.is_empty());
         self.collect_outlives_from_predicate_list(
             move |ty| ty == identity_proj,
-            traits::elaborate_predicates(tcx, trait_predicates),
+            std::iter::from_fn(move || elaborator.filter_next(&mut trait_predicates)),
         )
         .map(|b| b.1)
     }
