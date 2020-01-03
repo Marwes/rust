@@ -132,13 +132,17 @@ type ObligationGraph<O> = petgraph::stable_graph::StableDiGraph<Node<O>, (), usi
 
 pub struct ObligationForest<O: ForestObligation> {
     /// The list of obligations. In between calls to `process_obligations`,
-    /// this list only contains nodes in the `Pending` or `Waiting` state.
+    /// this list only contains nodes in the `Pending` or `Success` state.
     ///
     /// `usize` indices are used here and throughout this module, rather than
     /// `rustc_index::newtype_index!` indices, because this code is hot enough
     /// that the `u32`-to-`usize` conversions that would be required are
     /// significant, and space considerations are not important.
     nodes: ObligationGraph<O>,
+
+    /// The process generation is 1 on the first call to `process_obligations`,
+    /// 2 on the second call, etc.
+    gen: u32,
 
     /// A cache of predicates that have been successfully completed.
     done_cache: FxHashSet<O::Predicate>,
@@ -195,9 +199,9 @@ impl<O> Node<O> {
     }
 }
 
-/// The state of one node in some tree within the forest. This represents the
-/// current state of processing for the obligation (of type `O`) associated
-/// with this node.
+/// The state of one node in some tree within the forest. This
+/// represents the current state of processing for the obligation (of
+/// type `O`) associated with this node.
 ///
 /// The non-`Error` state transitions are as follows.
 /// ```
@@ -209,46 +213,50 @@ impl<O> Node<O> {
 ///  |
 ///  |     process_obligations()
 ///  v
-/// Success
-///  |  ^
-///  |  |  mark_successes()
+/// Success(not_waiting())
+///  |  |
+///  |  |  mark_still_waiting_nodes()
 ///  |  v
-///  |  Waiting
-///  |
-///  |     process_cycles()
-///  v
-/// Done
-///  |
-///  |     compress()
-///  v
+///  | Success(still_waiting())
+///  |  |
+///  |  |  compress()
+///  v  v
 /// (Removed)
 /// ```
 /// The `Error` state can be introduced in several places, via `error_at()`.
 ///
 /// Outside of `ObligationForest` methods, nodes should be either `Pending` or
-/// `Waiting`.
+/// `Success`.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum NodeState {
     /// This obligation has not yet been selected successfully. Cannot have
     /// subobligations.
     Pending,
 
-    /// This obligation was selected successfully, but may or may not have
-    /// subobligations.
-    Success,
-
-    /// This obligation was selected successfully, but it has a pending
-    /// subobligation.
-    Waiting,
-
-    /// This obligation, along with its subobligations, are complete, and will
-    /// be removed in the next collection.
-    Done,
+    /// This obligation was selected successfully, but it may be waiting on one
+    /// or more pending subobligations, as indicated by the `WaitingState`.
+    Success(WaitingState),
 
     /// This obligation was resolved to an error. It will be removed by the
     /// next compression step.
     Error,
 }
+
+/// Indicates when a `Success` node was last (if ever) waiting on one or more
+/// `Pending` nodes. The notion of "when" comes from `ObligationForest::gen`.
+/// - 0: "Not waiting". This is a special value, set by `process_obligation`,
+///   and usable because generation counting starts at 1.
+/// - 1..ObligationForest::gen: "Was waiting" in a previous generation, but
+///   waiting no longer. In other words, finished.
+/// - ObligationForest::gen: "Still waiting" in this generation.
+///
+/// Things to note about this encoding:
+/// - Every time `ObligationForest::gen` is incremented, all the "still
+///   waiting" nodes automatically become "was waiting".
+/// - `ObligationForest::is_still_waiting` is very cheap.
+///
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd)]
+struct WaitingState(u32);
 
 #[derive(Debug)]
 pub struct Outcome<O, E> {
@@ -472,7 +480,7 @@ impl<O: ForestObligation> ObligationForest<O> {
                 ProcessResult::Changed(children) => {
                     // We are not (yet) stalled.
                     stalled = false;
-                    node.state.set(NodeState::Success);
+                    node.state.set(NodeState::Success(Self::not_waiting()));
 
                     for child in children {
                         if let Err(()) = self.register_obligation_at(child, Some(index)) {
@@ -500,7 +508,7 @@ impl<O: ForestObligation> ObligationForest<O> {
             };
         }
 
-        self.mark_successes();
+        self.mark_still_waiting_nodes();
         self.process_cycles(processor);
         let completed = self.compress(do_completed);
 
@@ -611,7 +619,8 @@ impl<O: ForestObligation> ObligationForest<O> {
 
     /// Compresses the vector, removing all popped nodes. This adjusts the
     /// indices and hence invalidates any outstanding indices. `process_cycles`
-    /// must be run beforehand to remove any cycles on `Success` nodes.
+    /// must be run beforehand to remove any cycles on not-still-waiting
+    /// `Success` nodes.
     #[inline(never)]
     fn compress(&mut self, do_completed: DoCompleted) -> Option<Vec<O>> {
         let mut removed_success_obligations: Vec<O> = vec![];
@@ -640,7 +649,7 @@ impl<O: ForestObligation> ObligationForest<O> {
                     }
                     if do_completed == DoCompleted::Yes {
                         // Extract the success stories.
-                        removed_done_obligations.push(node.obligation.clone());
+                        removed_success_obligations.push(node.obligation.clone());
                     }
 
                     removals[index.index()] = true;
@@ -653,7 +662,6 @@ impl<O: ForestObligation> ObligationForest<O> {
                     self.insert_into_error_cache(index);
                     removals[index.index()] = true;
                 }
-                NodeState::Success => unreachable!(),
             }
         }
         self.node_order = node_order;

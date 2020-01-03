@@ -289,7 +289,7 @@ where
         components: &[Component<'tcx>],
         region: ty::Region<'tcx>,
     ) {
-        for component in components {
+        for component in components.iter() {
             let origin = origin.clone();
             match component {
                 Component::Region(region1) => {
