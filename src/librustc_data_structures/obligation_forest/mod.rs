@@ -156,9 +156,6 @@ pub struct ObligationForest<O: ForestObligation> {
     /// Necessary to keep a consistent ordering in the face of removals and insertions.
     node_order: Vec<NodeIndex>,
 
-    /// A vector reused in compress(), to avoid allocating new vectors.
-    removals: RefCell<Vec<bool>>,
-
     /// A Dfs that is reused to avoid allocating it.
     dfs: RefCell<
         petgraph::visit::Dfs<NodeIndex, <ObligationGraph<O> as petgraph::visit::Visitable>::Map>,
@@ -304,7 +301,6 @@ impl<O: ForestObligation> ObligationForest<O> {
                 Default::default(),
             )),
             error_cache: Default::default(),
-            removals: Default::default(),
         }
     }
 
@@ -343,7 +339,11 @@ impl<O: ForestObligation> ObligationForest<O> {
                     }
                 }
                 let node = &self.nodes[index];
-                if let NodeState::Error = node.state.get() { Err(()) } else { Ok(()) }
+                if let NodeState::Error = node.state.get() {
+                    Err(())
+                } else {
+                    Ok(())
+                }
             }
             Entry::Vacant(v) => {
                 let obligation_tree_id = match parent {
@@ -625,10 +625,6 @@ impl<O: ForestObligation> ObligationForest<O> {
     fn compress(&mut self, do_completed: DoCompleted) -> Option<Vec<O>> {
         let mut removed_success_obligations: Vec<O> = vec![];
 
-        let mut removals = self.removals.replace(vec![]);
-        removals.clear();
-        removals.resize(self.node_order.iter().max().map_or(0, |i| i.index() + 1), false);
-
         let node_order = mem::take(&mut self.node_order);
         for &index in &node_order {
             let node = &self.nodes[index];
@@ -652,7 +648,17 @@ impl<O: ForestObligation> ObligationForest<O> {
                         removed_success_obligations.push(node.obligation.clone());
                     }
 
-                    removals[index.index()] = true;
+                    let mut neighbors = self
+                        .nodes
+                        .neighbors_directed(index, petgraph::Direction::Incoming)
+                        .detach();
+                    while let Some((_, neighbor)) = neighbors.next(&self.nodes) {
+                        let parent = &mut self.nodes[neighbor].parent;
+                        if *parent == Some(index) {
+                            *parent = None;
+                        }
+                    }
+                    self.nodes.remove_node(index);
                 }
                 NodeState::Error => {
                     // We *intentionally* remove the node from the cache at this point. Otherwise
@@ -660,27 +666,31 @@ impl<O: ForestObligation> ObligationForest<O> {
                     // check against.
                     self.active_cache.remove(node.obligation.as_predicate());
                     self.insert_into_error_cache(index);
-                    removals[index.index()] = true;
+
+                    let mut neighbors = self
+                        .nodes
+                        .neighbors_directed(index, petgraph::Direction::Incoming)
+                        .detach();
+                    while let Some((_, neighbor)) = neighbors.next(&self.nodes) {
+                        let parent = &mut self.nodes[neighbor].parent;
+                        if *parent == Some(index) {
+                            *parent = None;
+                        }
+                    }
+                    self.nodes.remove_node(index);
                 }
             }
         }
         self.node_order = node_order;
 
-        self.nodes.retain_nodes(|mut nodes, index| {
-            let node = &mut nodes[index];
-            if let Some(parent) = node.parent {
-                if removals[parent.index()] {
-                    node.parent = None;
-                }
-            }
-            !removals[index.index()]
-        });
+        let nodes = &self.nodes;
+        self.active_cache.retain(|_predicate, index| nodes.contains_node(*index));
+        self.node_order.retain(|index| nodes.contains_node(*index));
 
-        self.active_cache.retain(|_predicate, index| !removals[index.index()]);
-        self.node_order.retain(|index| !removals[index.index()]);
-
-        self.removals.replace(removals);
-
-        if do_completed == DoCompleted::Yes { Some(removed_success_obligations) } else { None }
+        if do_completed == DoCompleted::Yes {
+            Some(removed_success_obligations)
+        } else {
+            None
+        }
     }
 }
