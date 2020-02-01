@@ -351,8 +351,10 @@ impl<'a, 'b, 'tcx> ObligationProcessor for FulfillProcessor<'a, 'b, 'tcx> {
                         // only reason we can fail to make progress on
                         // trait selection is because we don't have enough
                         // information about the types in the trait.
-                        pending_obligation.stalled_on =
-                            trait_ref_infer_vars(self.selcx, data.to_poly_trait_ref());
+                        pending_obligation.stalled_on.clear();
+                        pending_obligation
+                            .stalled_on
+                            .extend(trait_ref_infer_vars(self.selcx, data.to_poly_trait_ref()));
 
                         debug!(
                             "process_predicate: pending obligation {:?} now stalled on {:?}",
@@ -599,13 +601,13 @@ impl<'a, 'b, 'tcx> ObligationProcessor for FulfillProcessor<'a, 'b, 'tcx> {
 }
 
 /// Returns the set of inference variables contained in a trait ref.
-fn trait_ref_infer_vars<'a, 'tcx>(
-    selcx: &mut SelectionContext<'a, 'tcx>,
+fn trait_ref_infer_vars<'a, 'tcx, 'b>(
+    selcx: &'b mut SelectionContext<'a, 'tcx>,
     trait_ref: ty::PolyTraitRef<'tcx>,
-) -> Vec<TyOrConstInferVar<'tcx>> {
+) -> impl Iterator<Item = TyOrConstInferVar<'tcx>> + 'b + Captures<'a> + Captures<'tcx> {
     selcx
         .infcx()
-        .resolve_vars_if_possible(&trait_ref)
+        .resolve_vars_if_possible(trait_ref)
         .skip_binder() // ok b/c this check doesn't care about regions
         .substs
         .iter()
