@@ -263,6 +263,11 @@ pub struct Inherited<'a, 'tcx> {
     body_id: Option<hir::BodyId>,
 }
 
+impl<'a, 'tcx> Drop for Inherited<'a, 'tcx> {
+    fn drop(&mut self) {
+        self.fulfillment_cx.get_mut().deregister(&self.infcx);
+    }
+}
 impl<'a, 'tcx> Deref for Inherited<'a, 'tcx> {
     type Target = InferCtxt<'a, 'tcx>;
     fn deref(&self) -> &Self::Target {
@@ -4369,7 +4374,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                             for obligation in ok.obligations {
                                 fulfill.register_predicate_obligation(self, obligation);
                             }
-                            fulfill.select_where_possible(self)
+                            fulfill.select_all_where_possible(self)
                         })
                         .map_err(|_| ())?;
                     }

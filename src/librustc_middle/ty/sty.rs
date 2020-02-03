@@ -1331,6 +1331,18 @@ pub struct TyVid {
     pub index: u32,
 }
 
+impl Idx for TyVid {
+    #[inline]
+    fn new(idx: usize) -> Self {
+        assert!(idx <= u32::max_value() as usize);
+        TyVid { index: idx as u32 }
+    }
+    #[inline]
+    fn index(self) -> usize {
+        self.index as usize
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, RustcEncodable, RustcDecodable)]
 pub struct ConstVid<'tcx> {
     pub index: u32,
@@ -1342,9 +1354,33 @@ pub struct IntVid {
     pub index: u32,
 }
 
+impl Idx for IntVid {
+    #[inline]
+    fn new(idx: usize) -> Self {
+        assert!(idx <= u32::max_value() as usize);
+        IntVid { index: idx as u32 }
+    }
+    #[inline]
+    fn index(self) -> usize {
+        self.index as usize
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, RustcEncodable, RustcDecodable)]
 pub struct FloatVid {
     pub index: u32,
+}
+
+impl Idx for FloatVid {
+    #[inline]
+    fn new(idx: usize) -> Self {
+        assert!(idx <= u32::max_value() as usize);
+        FloatVid { index: idx as u32 }
+    }
+    #[inline]
+    fn index(self) -> usize {
+        self.index as usize
+    }
 }
 
 rustc_index::newtype_index! {

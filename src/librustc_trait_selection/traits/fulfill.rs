@@ -27,9 +27,15 @@ impl<'tcx> ForestObligation for PendingPredicateObligation<'tcx> {
     /// as the `ParamEnv` can influence whether fulfillment succeeds
     /// or fails.
     type CacheKey = ty::ParamEnvAnd<'tcx, ty::Predicate<'tcx>>;
+    type Variable = ty::InferTy;
+    type WatcherOffset = WatcherOffset;
 
     fn as_cache_key(&self) -> Self::CacheKey {
         self.obligation.param_env.and(self.obligation.predicate)
+    }
+
+    fn stalled_on(&self) -> &[Self::Variable] {
+        &self.stalled_on
     }
 }
 
@@ -121,29 +127,22 @@ impl<'a, 'tcx> FulfillmentContext<'tcx> {
 
         let mut errors = Vec::new();
 
-        loop {
-            debug!("select: starting another iteration");
+        debug!("select: starting another iteration");
 
-            // Process pending obligations.
-            let outcome = self.predicates.process_obligations(
-                &mut FulfillProcessor {
-                    selcx,
-                    register_region_obligations: self.register_region_obligations,
-                },
-                DoCompleted::No,
-            );
-            debug!("select: outcome={:#?}", outcome);
+        // Process pending obligations.
+        let outcome = self.predicates.process_obligations(
+            &mut FulfillProcessor {
+                selcx,
+                register_region_obligations: self.register_region_obligations,
+            },
+            DoCompleted::No,
+        );
+        debug!("select: outcome={:#?}", outcome);
 
-            // FIXME: if we kept the original cache key, we could mark projection
-            // obligations as complete for the projection cache here.
+        // FIXME: if we kept the original cache key, we could mark projection
+        // obligations as complete for the projection cache here.
 
-            errors.extend(outcome.errors.into_iter().map(to_fulfillment_error));
-
-            // If nothing new was added, no need to keep looping.
-            if outcome.stalled {
-                break;
-            }
-        }
+        errors.extend(outcome.errors.into_iter().map(to_fulfillment_error));
 
         debug!(
             "select({} predicates remaining, {} errors) done",
@@ -214,15 +213,22 @@ impl<'tcx> TraitEngine<'tcx> for FulfillmentContext<'tcx> {
         &mut self,
         infcx: &InferCtxt<'_, 'tcx>,
     ) -> Result<(), Vec<FulfillmentError<'tcx>>> {
-        self.select_where_possible(infcx)?;
+        let result = (|| {
+            self.select_where_possible(infcx)?;
 
-        let errors: Vec<_> = self
-            .predicates
-            .to_errors(CodeAmbiguity)
-            .into_iter()
-            .map(to_fulfillment_error)
-            .collect();
-        if errors.is_empty() { Ok(()) } else { Err(errors) }
+            let errors: Vec<_> = self
+                .predicates
+                .to_errors(CodeAmbiguity)
+                .into_iter()
+                .map(to_fulfillment_error)
+                .collect();
+
+            if errors.is_empty() { Ok(()) } else { Err(errors) }
+        })();
+        if let Some(offset) = self.predicates.take_offset() {
+            infcx.deregister_unify_watcher(offset);
+        }
+        result
     }
 
     fn select_where_possible(
@@ -231,6 +237,12 @@ impl<'tcx> TraitEngine<'tcx> for FulfillmentContext<'tcx> {
     ) -> Result<(), Vec<FulfillmentError<'tcx>>> {
         let mut selcx = SelectionContext::new(infcx);
         self.select(&mut selcx)
+    }
+
+    fn deregister(&mut self, infcx: &InferCtxt<'_, 'tcx>) {
+        if let Some(offset) = self.predicates.take_offset() {
+            infcx.deregister_unify_watcher(offset);
+        }
     }
 
     fn pending_obligations(&self) -> Vec<PredicateObligation<'tcx>> {
@@ -265,46 +277,7 @@ impl<'a, 'b, 'tcx> ObligationProcessor for FulfillProcessor<'a, 'b, 'tcx> {
         &mut self,
         pending_obligation: &mut Self::Obligation,
     ) -> ProcessResult<Self::Obligation, Self::Error> {
-        // If we were stalled on some unresolved variables, first check whether
-        // any of them have been resolved; if not, don't bother doing more work
-        // yet.
-        let change = match pending_obligation.stalled_on.len() {
-            // Match arms are in order of frequency, which matters because this
-            // code is so hot. 1 and 0 dominate; 2+ is fairly rare.
-            1 => {
-                let infer_var = pending_obligation.stalled_on[0];
-                self.selcx.infcx().ty_or_const_infer_var_changed(infer_var)
-            }
-            0 => {
-                // In this case we haven't changed, but wish to make a change.
-                true
-            }
-            _ => {
-                // This `for` loop was once a call to `all()`, but this lower-level
-                // form was a perf win. See #64545 for details.
-                (|| {
-                    for &infer_var in &pending_obligation.stalled_on {
-                        if self.selcx.infcx().ty_or_const_infer_var_changed(infer_var) {
-                            return true;
-                        }
-                    }
-                    false
-                })()
-            }
-        };
-
-        if !change {
-            debug!(
-                "process_predicate: pending obligation {:?} still stalled on {:?}",
-                self.selcx.infcx().resolve_vars_if_possible(&pending_obligation.obligation),
-                pending_obligation.stalled_on
-            );
-            return ProcessResult::Unchanged;
-        }
-
-        // This part of the code is much colder.
-
-        pending_obligation.stalled_on.truncate(0);
+        pending_obligation.stalled_on.clear();
 
         let obligation = &mut pending_obligation.obligation;
 
@@ -597,6 +570,29 @@ impl<'a, 'b, 'tcx> ObligationProcessor for FulfillProcessor<'a, 'b, 'tcx> {
             let cycle: Vec<_> = cycle.map(|c| c.obligation.clone()).collect();
             self.selcx.infcx().report_overflow_error_cycle(&cycle);
         }
+    }
+
+    fn unblocked(
+        &self,
+        offset: &WatcherOffset,
+        f: impl FnMut(<Self::Obligation as ForestObligation>::Variable) -> bool,
+    ) {
+        self.selcx.infcx().drain_modifications(offset, f);
+    }
+
+    fn register(&self) -> WatcherOffset {
+        self.selcx.infcx().register_unify_watcher()
+    }
+
+    fn deregister(&self, offset: WatcherOffset) {
+        self.selcx.infcx().deregister_unify_watcher(offset);
+    }
+
+    fn watch_variable(&self, var: <Self::Obligation as ForestObligation>::Variable) {
+        self.selcx.infcx().watch_variable(var);
+    }
+    fn unwatch_variable(&self, var: <Self::Obligation as ForestObligation>::Variable) {
+        self.selcx.infcx().unwatch_variable(var);
     }
 }
 

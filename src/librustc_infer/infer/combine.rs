@@ -74,6 +74,7 @@ impl<'infcx, 'tcx> InferCtxt<'infcx, 'tcx> {
         match (&a.kind, &b.kind) {
             // Relate integral variables to other types
             (&ty::Infer(ty::IntVar(a_id)), &ty::Infer(ty::IntVar(b_id))) => {
+                warn!("Unify int: {:?} {:?}", a_id, b_id);
                 self.inner
                     .borrow_mut()
                     .int_unification_table()
