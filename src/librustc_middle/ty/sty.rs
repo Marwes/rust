@@ -27,7 +27,6 @@ use rustc_target::abi::{Size, VariantIdx};
 use rustc_target::spec::abi;
 use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::marker::PhantomData;
 use std::ops::Range;
 use ty::util::IntTypeExt;
 
@@ -1344,9 +1343,20 @@ impl Idx for TyVid {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, RustcEncodable, RustcDecodable)]
-pub struct ConstVid<'tcx> {
+pub struct ConstVid {
     pub index: u32,
-    pub phantom: PhantomData<&'tcx ()>,
+}
+
+impl Idx for ConstVid {
+    #[inline]
+    fn new(idx: usize) -> Self {
+        assert!(idx <= u32::max_value() as usize);
+        Self { index: idx as u32 }
+    }
+    #[inline]
+    fn index(self) -> usize {
+        self.index as usize
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, RustcEncodable, RustcDecodable)]
@@ -2452,7 +2462,7 @@ pub enum ConstKind<'tcx> {
     Param(ParamConst),
 
     /// Infer the value of the const.
-    Infer(InferConst<'tcx>),
+    Infer(InferConst),
 
     /// Bound const variable, used only when preparing a trait query.
     Bound(DebruijnIndex, BoundVar),
@@ -2490,9 +2500,9 @@ impl<'tcx> ConstKind<'tcx> {
 /// An inference variable for a const, for use in const generics.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord, RustcEncodable, RustcDecodable, Hash)]
 #[derive(HashStable)]
-pub enum InferConst<'tcx> {
+pub enum InferConst {
     /// Infer the value of the const.
-    Var(ConstVid<'tcx>),
+    Var(ConstVid),
     /// A fresh const variable. See `infer::freshen` for more details.
     Fresh(u32),
 }

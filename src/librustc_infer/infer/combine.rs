@@ -190,7 +190,7 @@ impl<'infcx, 'tcx> InferCtxt<'infcx, 'tcx> {
     pub fn unify_const_variable(
         &self,
         vid_is_expected: bool,
-        vid: ty::ConstVid<'tcx>,
+        vid: ty::ConstVid,
         value: &'tcx ty::Const<'tcx>,
     ) -> RelateResult<'tcx, &'tcx ty::Const<'tcx>> {
         self.inner
@@ -661,10 +661,14 @@ impl TypeRelation<'tcx> for Generalizer<'_, 'tcx> {
                         if self.for_universe.can_name(universe) {
                             Ok(c)
                         } else {
-                            let new_var_id = variable_table.new_key(ConstVarValue {
-                                origin: var_value.origin,
-                                val: ConstVariableValue::Unknown { universe: self.for_universe },
-                            });
+                            let new_var_id = variable_table
+                                .new_key(ConstVarValue {
+                                    origin: var_value.origin,
+                                    val: ConstVariableValue::Unknown {
+                                        universe: self.for_universe,
+                                    },
+                                })
+                                .vid;
                             Ok(self.tcx().mk_const_var(new_var_id, c.ty))
                         }
                     }

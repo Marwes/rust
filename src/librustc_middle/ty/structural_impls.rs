@@ -129,7 +129,7 @@ impl fmt::Debug for ty::TyVid {
     }
 }
 
-impl<'tcx> fmt::Debug for ty::ConstVid<'tcx> {
+impl fmt::Debug for ty::ConstVid {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "_#{}c", self.index)
     }
@@ -1089,7 +1089,7 @@ impl<'tcx> TypeFoldable<'tcx> for ty::ConstKind<'tcx> {
     }
 }
 
-impl<'tcx> TypeFoldable<'tcx> for InferConst<'tcx> {
+impl<'tcx> TypeFoldable<'tcx> for InferConst {
     fn super_fold_with<F: TypeFolder<'tcx>>(&self, _folder: &mut F) -> Self {
         *self
     }
