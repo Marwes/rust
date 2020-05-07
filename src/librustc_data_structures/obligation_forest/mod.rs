@@ -577,6 +577,8 @@ impl<O: ForestObligation> ObligationForest<O> {
                 if node.state.get() != NodeState::Pending {
                     continue;
                 }
+
+                // Any variables we were stalled on are now resolved so remove the watches
                 for var in node.obligation.stalled_on() {
                     match self.stalled_on.entry(var.clone()) {
                         Entry::Vacant(_) => (),
@@ -607,18 +609,22 @@ impl<O: ForestObligation> ObligationForest<O> {
                 let node = &mut self.nodes[index];
                 match result {
                     ProcessResult::Unchanged => {
-                        for var in node.obligation.stalled_on() {
-                            self.stalled_on
-                                .entry(var.clone())
-                                .or_insert_with(|| {
-                                    processor.watch_variable(var.clone());
-                                    Vec::new()
-                                })
-                                .push(index);
-                        }
-
-                        if node.obligation.stalled_on().is_empty() {
+                        // We stalled but the variables that caused it are unknown so we run
+                        // `index` again at the next opportunity
+                        let stalled_on = node.obligation.stalled_on();
+                        if stalled_on.is_empty() {
                             self.check_next.push(index);
+                        } else {
+                            // Register every variable that we stal
+                            for var in stalled_on {
+                                self.stalled_on
+                                    .entry(var.clone())
+                                    .or_insert_with(|| {
+                                        processor.watch_variable(var.clone());
+                                        Vec::new()
+                                    })
+                                    .push(index);
+                            }
                         }
                         // No change in state.
                     }
@@ -673,15 +679,13 @@ impl<O: ForestObligation> ObligationForest<O> {
         processor.unblocked(self.offset.as_ref().unwrap(), |var| {
             if let Some(unblocked_nodes) = stalled_on.remove(&var) {
                 for node_index in unblocked_nodes {
+                    let node = &nodes[node_index];
                     debug_assert!(
-                        nodes[node_index].state.get() == NodeState::Pending,
+                        node.state.get() == NodeState::Pending,
                         "Unblocking non-pending2: {:?}",
-                        nodes[node_index].obligation
+                        node.obligation
                     );
-                    unblocked.push(Unblocked {
-                        index: node_index,
-                        order: nodes[node_index].node_number,
-                    });
+                    unblocked.push(Unblocked { index: node_index, order: node.node_number });
                 }
                 temp.push(var);
             }
