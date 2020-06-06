@@ -597,6 +597,23 @@ impl<O: ForestObligation> ObligationForest<O> {
                 continue;
             }
 
+            // One of the variables we stalled on unblocked us kj
+            for var in node.obligation.stalled_on() {
+                match self.stalled_on.entry(var.clone()) {
+                    Entry::Vacant(_) => (),
+                    Entry::Occupied(mut entry) => {
+                        let nodes = entry.get_mut();
+                        if let Some(i) = nodes.iter().position(|x| *x == index) {
+                            nodes.swap_remove(i);
+                        }
+                        if nodes.is_empty() {
+                            processor.unwatch_variable(var.clone());
+                            entry.remove();
+                        }
+                    }
+                }
+            }
+
             // `processor.process_obligation` can modify the predicate within
             // `node.obligation`, and that predicate is the key used for
             // `self.active_cache`. This means that `self.active_cache` can get

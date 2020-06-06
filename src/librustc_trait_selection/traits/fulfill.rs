@@ -449,9 +449,9 @@ impl<'a, 'b, 'tcx> ObligationProcessor for FulfillProcessor<'a, 'b, 'tcx> {
                 ) {
                     None => {
                         pending_obligation.stalled_on.clear();
-                        pending_obligation
-                            .stalled_on
-                            .push(TyOrConstInferVar::maybe_from_generic_arg(arg).unwrap());
+                        pending_obligation.stalled_on.push(infcx.root_ty_or_const(
+                            TyOrConstInferVar::maybe_from_generic_arg(arg).unwrap(),
+                        ));
                         ProcessResult::Unchanged
                     }
                     Some(os) => ProcessResult::Changed(mk_pending(os)),
@@ -522,7 +522,8 @@ impl<'a, 'b, 'tcx> ObligationProcessor for FulfillProcessor<'a, 'b, 'tcx> {
                                 stalled_on.append(
                                     &mut substs
                                         .types()
-                                        .filter_map(|ty| TyOrConstInferVar::maybe_from_ty(ty))
+                                        .filter_map(TyOrConstInferVar::maybe_from_ty)
+                                        .map(|var| infcx.root_ty_or_const(var))
                                         .collect(),
                                 );
                                 Err(ErrorHandled::TooGeneric)
