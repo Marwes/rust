@@ -127,7 +127,9 @@ pub trait ObligationProcessor {
     where
         I: Clone + Iterator<Item = &'c Self::Obligation>;
 
-    fn unblocked(
+    /// Calls `f` with all the variables that has been unblocked (instantiated) since the last call
+    /// to `notify_unblocked`
+    fn notify_unblocked(
         &self,
         offset: &<Self::Obligation as ForestObligation>::WatcherOffset,
         f: impl FnMut(<Self::Obligation as ForestObligation>::Variable),
@@ -214,7 +216,7 @@ pub struct ObligationForest<O: ForestObligation> {
     stalled_on_unknown: Vec<NodeIndex>,
     /// The offset that this `ObligationForest` has registered. Should be de-registered before
     /// dropping this forest.
-    offset: Option<O::WatcherOffset>,
+    watcher_offset: Option<O::WatcherOffset>,
     /// Reusable vector for storing unblocked nodes whose watch should be removed
     temp_unblocked_nodes: Vec<O::Variable>,
 }
@@ -248,7 +250,7 @@ struct Node<O: ForestObligation> {
     obligation: O,
     state: Cell<NodeState>,
 
-    /// A predicate (and its key) can changed during processing. If it does we need to register the
+    /// A predicate (and its key) can change during processing. If it does we need to register the
     /// old predicate so that we can remove or mark it as done if this node errors or is done.
     alternative_predicates: Vec<O::CacheKey>,
 
@@ -293,7 +295,7 @@ where
     }
 
     /// Initializes a node, reusing the existing allocations
-    fn init(
+    fn reinit(
         &mut self,
         parent: Option<NodeIndex>,
         obligation: O,
@@ -414,16 +416,19 @@ impl<O: ForestObligation> ObligationForest<O> {
             unblocked: Default::default(),
             stalled_on_unknown: Default::default(),
             temp_unblocked_nodes: Default::default(),
-            offset: None,
+            watcher_offset: None,
         }
     }
 
-    pub fn offset(&self) -> Option<&O::WatcherOffset> {
-        self.offset.as_ref()
+    /// Returns the `WatcherOffset` regsitered with the notification table. See the field
+    /// `ObligationForest::watcher_offset`.
+    pub fn watcher_offset(&self) -> Option<&O::WatcherOffset> {
+        self.watcher_offset.as_ref()
     }
 
-    pub fn take_offset(&mut self) -> Option<O::WatcherOffset> {
-        self.offset.take()
+    /// Removes the watcher_offset, allowing it to be deregistered
+    pub fn take_watcher_offset(&mut self) -> Option<O::WatcherOffset> {
+        self.watcher_offset.take()
     }
 
     /// Returns the total number of nodes in the forest that have not
@@ -496,7 +501,7 @@ impl<O: ForestObligation> ObligationForest<O> {
                     // otherwise allocate a new node
                     let new_index = if let Some(new_index) = self.dead_nodes.pop() {
                         let node = &mut self.nodes[new_index];
-                        node.init(parent, obligation, obligation_tree_id, node_number);
+                        node.reinit(parent, obligation, obligation_tree_id, node_number);
                         new_index
                     } else {
                         let new_index = self.nodes.len();
@@ -566,8 +571,8 @@ impl<O: ForestObligation> ObligationForest<O> {
     where
         P: ObligationProcessor<Obligation = O>,
     {
-        if self.offset.is_none() {
-            self.offset = Some(processor.register_variable_watcher());
+        if self.watcher_offset.is_none() {
+            self.watcher_offset = Some(processor.register_variable_watcher());
         }
         let mut errors = vec![];
         let mut stalled = true;
@@ -665,7 +670,10 @@ impl<O: ForestObligation> ObligationForest<O> {
         Outcome { completed, errors }
     }
 
-    #[inline(never)]
+    /// Checks which nodes have been unblocked since the last time this was called. All nodes that
+    /// were unblocked is added to the `unblocked` queue and all watches associated with the
+    /// variables blocking those nodes are deregistered (since they are now instantiated, they will
+    /// neither block a node, nor be instantiated again)
     fn unblock_nodes<P>(&mut self, processor: &mut P)
     where
         P: ObligationProcessor<Obligation = O>,
@@ -675,7 +683,7 @@ impl<O: ForestObligation> ObligationForest<O> {
         let unblocked = &mut self.unblocked;
         let temp_unblocked_nodes = &mut self.temp_unblocked_nodes;
         temp_unblocked_nodes.clear();
-        processor.unblocked(self.offset.as_ref().unwrap(), |var| {
+        processor.notify_unblocked(self.watcher_offset.as_ref().unwrap(), |var| {
             if let Some(unblocked_nodes) = stalled_on.remove(&var) {
                 for node_index in unblocked_nodes {
                     let node = &nodes[node_index];
