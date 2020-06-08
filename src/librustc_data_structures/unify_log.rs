@@ -10,7 +10,8 @@ pub enum Undo<T> {
 
 /// Tracks which variables (represented by indices) that has been unified with eachother.
 /// Since there is often only a few variables that are interesting one must call `watch_variable`
-/// before this records any variables unified with that variable.
+/// on any variable record unifications with. Used in conjuction with a `ModifiedSet` to accurately
+/// track which variables has been instantiated.
 ///
 /// NOTE: The methods on this expect and only work correctly if a root variable from
 /// an `UnificationTable` is provided.
@@ -43,7 +44,8 @@ impl<T: Idx> UnifyLog<T> {
         }
     }
 
-    /// Logs that `root` were unified with `other`. Allowing
+    /// Logs that `root` were unified with `other`. Allowing all variables that were unified with
+    /// root to be returned by `get` (if those variables are watched)
     pub fn unify(&mut self, undo_log: &mut impl UndoLogs<Undo<T>>, root: T, other: T) {
         if !self.needs_log(other) {
             return;

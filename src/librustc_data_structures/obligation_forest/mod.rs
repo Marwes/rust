@@ -269,6 +269,9 @@ struct Node<O: ForestObligation> {
 
     /// Identifier of the obligation tree to which this node belongs.
     obligation_tree_id: ObligationTreeId,
+
+    /// Nodes must be processed in the order that they were added so we give each node a unique,
+    /// number allowing them to be ordered when processing them.
     node_number: u32,
 }
 
@@ -294,7 +297,8 @@ where
         }
     }
 
-    /// Initializes a node, reusing the existing allocations
+    /// Initializes a node, reusing the existing allocations. Used when removing a node from the
+    /// dead_nodes list
     fn reinit(
         &mut self,
         parent: Option<NodeIndex>,
@@ -878,6 +882,8 @@ impl<O: ForestObligation> ObligationForest<O> {
         let mut error_or_done_nodes = mem::take(self.error_or_done_nodes.get_mut());
         for &index in &error_or_done_nodes {
             let node = &mut self.nodes[index];
+
+            // Remove this node from all the nodes that depends on it
             let reverse_dependents = mem::take(&mut node.reverse_dependents);
             for &reverse_index in &reverse_dependents {
                 let reverse_node = &mut self.nodes[reverse_index];
@@ -909,6 +915,8 @@ impl<O: ForestObligation> ObligationForest<O> {
                         removed_done_obligations.push(node.obligation.clone());
                     }
 
+                    // Store the node so it and its allocations can be used when another node is
+                    // allocated
                     self.dead_nodes.push(index);
                 }
                 NodeState::Error => {
