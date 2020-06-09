@@ -871,9 +871,8 @@ impl<O: ForestObligation> ObligationForest<O> {
         }
     }
 
-    /// Compresses the vector, removing all popped nodes. This adjusts the
-    /// indices and hence invalidates any outstanding indices. `process_cycles`
-    /// must be run beforehand to remove any cycles on `Success` nodes.
+    /// Compresses the forest, moving all nodes marked `Done` or `Error` into `dead_nodes` for later reuse
+    /// `process_cycles` must be run beforehand to remove any cycles on `Success` nodes.
     #[inline(never)]
     fn compress(&mut self, do_completed: DoCompleted) -> Option<Vec<O>> {
         let mut removed_done_obligations: Vec<O> = vec![];
@@ -904,6 +903,8 @@ impl<O: ForestObligation> ObligationForest<O> {
                     if let Some(opt) = self.active_cache.get_mut(&node.obligation.as_cache_key()) {
                         *opt = CacheState::Done;
                     }
+                    // If the node's predicate changed at some point we mark all its alternate
+                    // predicates as done as well
                     for alt in &node.alternative_predicates {
                         if let Some(opt) = self.active_cache.get_mut(alt) {
                             *opt = CacheState::Done;
@@ -924,6 +925,8 @@ impl<O: ForestObligation> ObligationForest<O> {
                     // tests must come up with a different type on every type error they
                     // check against.
                     self.active_cache.remove(&node.obligation.as_cache_key());
+                    // If the node's predicate changed at some point we remove all its alternate
+                    // predicates as well
                     for alt in &node.alternative_predicates {
                         self.active_cache.remove(alt);
                     }
