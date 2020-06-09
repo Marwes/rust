@@ -519,12 +519,11 @@ impl<'a, 'b, 'tcx> ObligationProcessor for FulfillProcessor<'a, 'b, 'tcx> {
                         ) {
                             Ok(val) => Ok(Const::from_value(self.selcx.tcx(), val, c.ty)),
                             Err(ErrorHandled::TooGeneric) => {
-                                stalled_on.append(
-                                    &mut substs
+                                stalled_on.extend(
+                                    substs
                                         .types()
                                         .filter_map(TyOrConstInferVar::maybe_from_ty)
-                                        .map(|var| infcx.root_ty_or_const(var))
-                                        .collect(),
+                                        .map(|var| infcx.root_ty_or_const(var)),
                                 );
                                 Err(ErrorHandled::TooGeneric)
                             }
