@@ -1,3 +1,4 @@
+//! The `ObligationForest` is a utility data structure used in trait
 //! matching to track the set of outstanding obligations (those not yet
 //! resolved to success or error). It also tracks the "backtrace" of each
 //! pending obligation (why we are trying to figure this out in the first
@@ -41,7 +42,7 @@
 //!   now considered to be in error.
 //!
 //! When the call to `process_obligations` completes, you get back an `Outcome`,
-//! which includes three bits of information:
+//! which includes two bits of information:
 //!
 //! - `completed`: a list of obligations where processing was fully
 //!   completed without error (meaning that all transitive subobligations
@@ -52,13 +53,6 @@
 //!   all the obligations in `C` have been found completed.
 //! - `errors`: a list of errors that occurred and associated backtraces
 //!   at the time of error, which can be used to give context to the user.
-//! - `stalled`: if true, then none of the existing obligations were
-//!   *shallowly successful* (that is, no callback returned `Changed(_)`).
-//!   This implies that all obligations were either errors or returned an
-//!   ambiguous result, which means that any further calls to
-//!   `process_obligations` would simply yield back further ambiguous
-//!   results. This is used by the `FulfillmentContext` to decide when it
-//!   has reached a steady state.
 //!
 //! ### Implementation details
 //!
@@ -88,17 +82,17 @@ mod graphviz;
 mod tests;
 
 pub trait ForestObligation: Clone + Debug {
-    /// A key used to avoid evaluating the same obligation twice
+    /// A key used to avoid evaluating the same obligation twice.
     type CacheKey: Clone + hash::Hash + Eq + Debug;
-    /// The variable type used in the obligation when it could not yet be fulfilled
+    /// The variable type used in the obligation when it could not yet be fulfilled.
     type Variable: Clone + hash::Hash + Eq + Debug;
-    /// A type which tracks which variables has been unified
+    /// A type which tracks which variables has been unified.
     type WatcherOffset;
 
     /// Converts this `ForestObligation` suitable for use as a cache key.
     /// If two distinct `ForestObligations`s return the same cache key,
     /// then it must be sound to use the result of processing one obligation
-    /// (e.g. success for error) for the other obligation
+    /// (e.g. success for error) for the other obligation.
     fn as_cache_key(&self) -> Self::CacheKey;
 
     /// Returns which variables this obligation is currently stalled on. If the slice is empty then
@@ -127,8 +121,8 @@ pub trait ObligationProcessor {
     where
         I: Clone + Iterator<Item = &'c Self::Obligation>;
 
-    /// Calls `f` with all the variables that has been unblocked (instantiated) since the last call
-    /// to `notify_unblocked`
+    /// Calls `f` with all the variables that have been unblocked (instantiated) since the last call
+    /// to `notify_unblocked`.
     fn notify_unblocked(
         &self,
         offset: &<Self::Obligation as ForestObligation>::WatcherOffset,
@@ -177,14 +171,15 @@ pub struct ObligationForest<O: ForestObligation> {
     /// number allowing them to be ordered when processing them.
     node_number: u32,
 
-    /// Stores the indices of the nodes currently in the pending state
+    /// Stores the indices of the nodes currently in the pending state.
     pending_nodes: Vec<NodeIndex>,
 
     /// Stores the indices of the nodes currently in the success or waiting states.
     /// Can also contain `Done` or `Error` nodes as `process_cycles` does not remove a node
     /// immediately but instead upon the next time that node is processed.
     success_or_waiting_nodes: Vec<NodeIndex>,
-    /// Stores the indices of the nodes currently in the error or done states
+
+    /// Stores the indices of the nodes currently in the error or done states.
     error_or_done_nodes: RefCell<Vec<NodeIndex>>,
 
     /// Nodes that have been removed and are ready to be reused (pure optimization to reuse
@@ -207,22 +202,26 @@ pub struct ObligationForest<O: ForestObligation> {
     /// [details]: https://github.com/rust-lang/rust/pull/53255#issuecomment-421184780
     error_cache: FxHashMap<ObligationTreeId, FxHashSet<O::CacheKey>>,
 
-    /// Stores which nodes would be unblocked once `O::Variable` is unified
+    /// Stores which nodes would be unblocked once `O::Variable` is unified.
     stalled_on: FxHashMap<O::Variable, Vec<NodeIndex>>,
-    /// Stores the node indices that are unblocked and should be processed at the next opportunity
+
+    /// Stores the node indices that are unblocked and should be processed at the next opportunity.
     unblocked: BinaryHeap<Unblocked>,
+
     /// Stores nodes which should be processed on the next iteration since the variables they are
-    /// actually blocked on are unknown
+    /// actually blocked on are unknown.
     stalled_on_unknown: Vec<NodeIndex>,
+
     /// The offset that this `ObligationForest` has registered. Should be de-registered before
     /// dropping this forest.
+    ///
     watcher_offset: Option<O::WatcherOffset>,
-    /// Reusable vector for storing unblocked nodes whose watch should be removed
+    /// Reusable vector for storing unblocked nodes whose watch should be removed.
     temp_unblocked_nodes: Vec<O::Variable>,
 }
 
 /// Helper struct for use with `BinaryHeap` to process nodes in the order that they were added to
-/// the forest
+/// the forest.
 struct Unblocked {
     index: NodeIndex,
     order: u32,
@@ -257,6 +256,7 @@ struct Node<O: ForestObligation> {
     /// Obligations that depend on this obligation for their completion. They
     /// must all be in a non-pending state.
     dependents: Vec<NodeIndex>,
+
     /// Obligations that this obligation depends on for their completion.
     reverse_dependents: Vec<NodeIndex>,
 
@@ -270,7 +270,7 @@ struct Node<O: ForestObligation> {
     /// Identifier of the obligation tree to which this node belongs.
     obligation_tree_id: ObligationTreeId,
 
-    /// Nodes must be processed in the order that they were added so we give each node a unique,
+    /// Nodes must be processed in the order that they were added so we give each node a unique
     /// number allowing them to be ordered when processing them.
     node_number: u32,
 }
@@ -548,11 +548,7 @@ impl<O: ForestObligation> ObligationForest<O> {
     where
         F: Fn(&O) -> P,
     {
-        self.pending_nodes
-            .iter()
-            .map(|&index| &self.nodes[index])
-            .map(|node| f(&node.obligation))
-            .collect()
+        self.pending_nodes.iter().map(|&index| f(&self.nodes[index].obligation)).collect()
     }
 
     fn insert_into_error_cache(&mut self, index: NodeIndex) {
@@ -698,7 +694,7 @@ impl<O: ForestObligation> ObligationForest<O> {
     }
 
     /// Checks which nodes have been unblocked since the last time this was called. All nodes that
-    /// were unblocked is added to the `unblocked` queue and all watches associated with the
+    /// were unblocked are added to the `unblocked` queue and all watches associated with the
     /// variables blocking those nodes are deregistered (since they are now instantiated, they will
     /// neither block a node, nor be instantiated again)
     fn unblock_nodes<P>(&mut self, processor: &mut P)
